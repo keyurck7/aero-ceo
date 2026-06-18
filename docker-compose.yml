@@ -1,0 +1,13 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aero_ceo_postgres
+    environment:
+      POSTGRES_USER: aero
+      POSTGRES_PASSWORD: aero_password
+      POSTGRES_DB: aero_ceo
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.pgdata:/var/lib/postgresql/data
+      - ./app/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
