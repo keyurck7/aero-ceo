@@ -1,0 +1,97 @@
+AIRBUS_KEYWORDS = [
+    "Airbus",
+    "Airbus Defence and Space",
+    "Eurofighter",
+    "FCAS",
+    "Future Combat Air System",
+    "A400M",
+    "A330 MRTT",
+    "C295",
+    "Eurodrone",
+    "SIRTAP",
+    "uncrewed aircraft",
+    "crew-uncrewed teaming",
+    "combat cloud",
+    "military satellite",
+    "defence autonomy",
+    "European defence",
+]
+
+STRATEGIC_TOPICS = [
+    "FCAS",
+    "Eurofighter",
+    "Uncrewed Combat Aircraft",
+    "Crewed-Uncrewed Teaming",
+    "Military Transport",
+    "Aerial Refuelling",
+    "Military Space",
+    "Secure Communications",
+    "European Defence Autonomy",
+    "Competitor Activity",
+    "Supply Chain",
+    "Policy and Procurement",
+    "Sentiment",
+]
+
+SOURCES = [
+    {
+        "name": "Airbus Newsroom",
+        "source_type": "official",
+        "base_url": "https://www.airbus.com/en/newsroom",
+        "trust_score": 0.95,
+    },
+    {
+        "name": "Airbus Defence",
+        "source_type": "official",
+        "base_url": "https://www.airbus.com/en/products-services/defence",
+        "trust_score": 0.95,
+    },
+    {
+        "name": "Reuters Aerospace and Defence",
+        "source_type": "news",
+        "base_url": "https://www.reuters.com/business/aerospace-defense/",
+        "trust_score": 0.90,
+    },
+    {
+        "name": "Defense News",
+        "source_type": "news",
+        "base_url": "https://www.defensenews.com",
+        "trust_score": 0.82,
+    },
+    {
+        "name": "Breaking Defense",
+        "source_type": "news",
+        "base_url": "https://breakingdefense.com",
+        "trust_score": 0.82,
+    },
+    {
+        "name": "NATO",
+        "source_type": "policy",
+        "base_url": "https://www.nato.int",
+        "trust_score": 0.90,
+    },
+    {
+        "name": "European Defence Agency",
+        "source_type": "policy",
+        "base_url": "https://eda.europa.eu",
+        "trust_score": 0.88,
+    },
+    {
+        "name": "Dassault Aviation",
+        "source_type": "competitor",
+        "base_url": "https://www.dassault-aviation.com",
+        "trust_score": 0.85,
+    },
+    {
+        "name": "BAE Systems",
+        "source_type": "competitor",
+        "base_url": "https://www.baesystems.com",
+        "trust_score": 0.85,
+    },
+    {
+        "name": "Boeing Defense",
+        "source_type": "competitor",
+        "base_url": "https://www.boeing.com/defense",
+        "trust_score": 0.85,
+    },
+]

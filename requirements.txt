@@ -10,8 +10,6 @@ trafilatura
 feedparser
 python-dotenv
 sqlalchemy
-psycopg2-binary
-pgvector
 sentence-transformers
 transformers
 accelerate
@@ -21,3 +19,7 @@ spacy
 pydantic
 tqdm
 rich
+faiss-cpu
+lxml
+readability-lxml
+python-dateutil
