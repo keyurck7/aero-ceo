@@ -7,6 +7,8 @@ import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 
+from app.agents.ceo_chat_agent import CEOChatAgent
+
 load_dotenv()
 
 DB_PATH = os.getenv("SQLITE_DB_PATH", "data/aero_ceo.sqlite")
@@ -35,6 +37,11 @@ def read_df(query: str, params=None) -> pd.DataFrame:
         return pd.read_sql_query(query, conn, params=params or {})
     finally:
         conn.close()
+
+
+@st.cache_resource(show_spinner=False)
+def get_ceo_agent():
+    return CEOChatAgent()
 
 
 def metric_value(query: str):
@@ -125,7 +132,7 @@ if not recommendations_df.empty:
         ascending=[True, False]
     )
 
-tab_overview, tab_market, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_evidence, tab_system = st.tabs(
+tab_overview, tab_market, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_evidence, tab_system = st.tabs(
     [
         "Executive Overview",
         "Market Intelligence",
@@ -133,6 +140,7 @@ tab_overview, tab_market, tab_opportunity, tab_risk, tab_sentiment, tab_recommen
         "Risk Monitor",
         "Sentiment Analysis",
         "CEO Recommendations",
+        "Ask AERO-CEO",
         "Evidence Explorer",
         "System Audit",
     ]
@@ -394,6 +402,143 @@ with tab_recommendations:
                         f"Document: {item['document_title']}  \n"
                         f"URL: {item['url']}"
                     )
+
+
+with tab_ask:
+    st.subheader("Ask AERO-CEO")
+
+    st.caption(
+        "Ask strategic follow-up questions about Airbus SE, Airbus Defence and Space, FCAS, Eurofighter, "
+        "uncrewed systems, partnerships, risks, competitors, and evidence-backed recommendations."
+    )
+
+    q1, q2, q3 = st.columns(3)
+    q1.metric("Mode", "Evidence-grounded Q&A")
+    q2.metric("Repository", "FAISS + SQLite")
+    q3.metric("Agent", "CEO Strategic Advisor")
+
+    example_questions = [
+        "Should Airbus collaborate with another European organization for sixth-generation fighter systems?",
+        "What are the biggest risks if FCAS is delayed?",
+        "What should Airbus do if budget is limited but it still wants to compete in uncrewed combat aircraft?",
+        "Explain the recommendation about military space and secure communications with evidence.",
+        "Which partner could help Airbus in Spain for SIRTAP and uncrewed systems?",
+        "What is the lower-risk version of investing in future combat systems?",
+    ]
+
+    selected_example = st.selectbox(
+        "Choose an example CEO question",
+        [""] + example_questions,
+    )
+
+    default_question = selected_example if selected_example else ""
+
+    ceo_question = st.text_area(
+        "CEO question",
+        value=default_question,
+        height=90,
+        placeholder="Ask AERO-CEO a strategic question, for example: What should Airbus do if FCAS is delayed?",
+    )
+
+    col_a, col_b, col_c = st.columns([1, 1, 2])
+    ask_button = col_a.button("Ask AERO-CEO", type="primary")
+    clear_button = col_b.button("Clear current answer")
+
+    if clear_button:
+        st.session_state.pop("latest_ceo_answer", None)
+        st.session_state.pop("latest_ceo_route", None)
+        st.session_state.pop("latest_ceo_confidence", None)
+        st.session_state.pop("latest_ceo_evidence_count", None)
+
+    if ask_button:
+        if not ceo_question.strip():
+            st.warning("Please enter a CEO question first.")
+        else:
+            with st.spinner("AERO-CEO is retrieving evidence and generating a strategic answer..."):
+                try:
+                    agent = get_ceo_agent()
+                    result = agent.answer(ceo_question.strip(), top_k=8)
+
+                    st.session_state["latest_ceo_answer"] = result["answer_markdown"]
+                    st.session_state["latest_ceo_route"] = result["route"]
+                    st.session_state["latest_ceo_confidence"] = result["confidence"]
+                    st.session_state["latest_ceo_evidence_count"] = result["evidence_count"]
+                except Exception as exc:
+                    st.error(f"CEO agent failed: {exc}")
+
+    if "latest_ceo_answer" in st.session_state:
+        route = st.session_state.get("latest_ceo_route", {})
+        confidence = st.session_state.get("latest_ceo_confidence", 0)
+        evidence_count = st.session_state.get("latest_ceo_evidence_count", 0)
+
+        st.markdown("### Answer Summary")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Intent", route.get("intent", "unknown"))
+        s2.metric("Topic", route.get("topic") or "General")
+        s3.metric("Confidence", confidence)
+        s4.metric("Evidence Items", evidence_count)
+
+        st.markdown("### AERO-CEO Answer")
+        st.markdown(st.session_state["latest_ceo_answer"])
+
+    st.markdown("### Recent CEO Q&A Sessions")
+
+    try:
+        recent_qna = read_df("""
+            SELECT id, question, intent, topic, business_area, region,
+                   confidence_score, evidence_count, created_at
+            FROM ceo_queries
+            ORDER BY id DESC
+            LIMIT 20
+        """)
+
+        if recent_qna.empty:
+            st.info("No CEO Q&A sessions stored yet. Ask a question above.")
+        else:
+            st.dataframe(
+                recent_qna,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "confidence_score": st.column_config.ProgressColumn(
+                        "Confidence",
+                        min_value=0,
+                        max_value=1,
+                    )
+                },
+            )
+
+            selected_qna_id = st.number_input(
+                "Open saved Q&A by ID",
+                min_value=1,
+                step=1,
+                value=int(recent_qna.iloc[0]["id"]),
+            )
+
+            selected_qna = read_df(
+                """
+                SELECT question, answer_markdown, confidence_score, evidence_count, created_at
+                FROM ceo_queries
+                WHERE id = ?
+                """,
+                params=(selected_qna_id,),
+            )
+
+            if not selected_qna.empty:
+                row = selected_qna.iloc[0]
+                with st.expander(f"Saved answer for Q&A #{selected_qna_id}", expanded=False):
+                    st.markdown(f"**Question:** {row['question']}")
+                    st.markdown(f"**Confidence:** {row['confidence_score']} | **Evidence count:** {row['evidence_count']} | **Created:** {row['created_at']}")
+                    st.markdown(row["answer_markdown"])
+
+    except Exception as exc:
+        st.info(
+            "CEO Q&A table is not initialized yet. Ask one question first or run "
+            "`bash scripts/ask_ceo.sh \"your question\"`."
+        )
+        st.caption(str(exc))
+
+
 
 with tab_evidence:
     st.subheader("Evidence Explorer")
