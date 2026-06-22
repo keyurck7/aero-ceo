@@ -8,6 +8,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from app.agents.ceo_chat_agent import CEOChatAgent
+from app.agents.recommendation_drilldown import DRILLDOWN_ACTIONS, build_drilldown_question
 
 load_dotenv()
 
@@ -402,6 +403,82 @@ with tab_recommendations:
                         f"Document: {item['document_title']}  \n"
                         f"URL: {item['url']}"
                     )
+
+
+    st.markdown("---")
+    st.markdown("### Recommendation Drill-down")
+
+    st.caption(
+        "Use this section to interrogate a recommendation. "
+        "The CEO can ask why, inspect evidence, request a lower-risk version, test budget constraints, "
+        "or explore partnership options."
+    )
+
+    if recommendations_df.empty:
+        st.info("No recommendations available for drill-down.")
+    else:
+        rec_options = {
+            f"{int(row['id'])} | {row['priority']} | confidence {row['confidence_score']:.3f} | {row['title']}": int(row["id"])
+            for _, row in recommendations_df.iterrows()
+        }
+
+        selected_rec_label = st.selectbox(
+            "Select recommendation for drill-down",
+            list(rec_options.keys()),
+            key="drilldown_rec_select",
+        )
+
+        selected_action = st.selectbox(
+            "Select drill-down action",
+            list(DRILLDOWN_ACTIONS.keys()),
+            key="drilldown_action_select",
+        )
+
+        custom_condition = st.text_input(
+            "Optional CEO condition",
+            placeholder="Example: limited budget, low political risk, focus on Spain, fast 6-month execution",
+            key="drilldown_custom_condition",
+        )
+
+        run_drilldown = st.button("Run Recommendation Drill-down", type="primary")
+
+        if run_drilldown:
+            selected_rec_id = rec_options[selected_rec_label]
+            selected_rec_rows = recommendations_df[recommendations_df["id"] == selected_rec_id]
+
+            if selected_rec_rows.empty:
+                st.error("Selected recommendation was not found.")
+            else:
+                selected_rec = selected_rec_rows.iloc[0].to_dict()
+                drilldown_question = build_drilldown_question(
+                    recommendation=selected_rec,
+                    action=selected_action,
+                    custom_condition=custom_condition,
+                )
+
+                with st.spinner("AERO-CEO is drilling into the recommendation with evidence..."):
+                    try:
+                        agent = get_ceo_agent()
+                        result = agent.answer(drilldown_question, top_k=8)
+
+                        st.session_state["latest_drilldown_result"] = result
+                        st.session_state["latest_drilldown_action"] = selected_action
+                        st.session_state["latest_drilldown_rec_label"] = selected_rec_label
+                    except Exception as exc:
+                        st.error(f"Recommendation drill-down failed: {exc}")
+
+        if "latest_drilldown_result" in st.session_state:
+            result = st.session_state["latest_drilldown_result"]
+            route = result.get("route", {})
+
+            st.markdown("#### Drill-down Result")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Action", st.session_state.get("latest_drilldown_action", ""))
+            d2.metric("Intent", route.get("intent", "unknown"))
+            d3.metric("Confidence", result.get("confidence", 0))
+            d4.metric("Evidence Items", result.get("evidence_count", 0))
+
+            st.markdown(result["answer_markdown"])
 
 
 with tab_ask:
