@@ -8,6 +8,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from app.agents.ceo_chat_agent import CEOChatAgent
+from app.intelligence.business_unit_strategy import BUSINESS_UNITS, build_business_unit_profile, generate_profile_markdown
 from app.agents.recommendation_drilldown import DRILLDOWN_ACTIONS, build_drilldown_question
 
 load_dotenv()
@@ -133,15 +134,17 @@ if not recommendations_df.empty:
         ascending=[True, False]
     )
 
-tab_overview, tab_market, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_evidence, tab_system = st.tabs(
+tab_overview, tab_market, tab_units, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_scenario, tab_evidence, tab_system = st.tabs(
     [
         "Executive Overview",
         "Market Intelligence",
+        "Business Unit Strategy",
         "Opportunity Monitor",
         "Risk Monitor",
         "Sentiment Analysis",
         "CEO Recommendations",
         "Ask AERO-CEO",
+        "Scenario Analyzer",
         "Evidence Explorer",
         "System Audit",
     ]
@@ -243,6 +246,154 @@ with tab_market:
 
     fig = px.bar(radar_df, x="Entity", y="Mentions", title="Competitor / Policy Mentions")
     st.plotly_chart(fig, use_container_width=True)
+
+with tab_units:
+    st.subheader("Business Unit Strategy")
+
+    st.caption(
+        "Select a section of Airbus and inspect its documents, strategic signals, risks, opportunities, "
+        "recommendations, and evidence. This gives CEO-level coverage beyond one static recommendation."
+    )
+
+    selected_unit = st.selectbox(
+        "Select Airbus section",
+        list(BUSINESS_UNITS.keys()),
+    )
+
+    try:
+        profile = build_business_unit_profile(selected_unit)
+
+        st.markdown(f"### {selected_unit}")
+        st.write(profile["description"])
+
+        u1, u2, u3, u4, u5 = st.columns(5)
+        u1.metric("Documents", profile["document_count"])
+        u2.metric("Signals", profile["signal_count"])
+        u3.metric("Opportunities", profile["opportunity_count"])
+        u4.metric("Risks", profile["risk_count"])
+        u5.metric("Trends", profile["trend_count"])
+
+        st.markdown("### Executive Profile")
+        st.markdown(generate_profile_markdown(selected_unit))
+
+        left_col, right_col = st.columns(2)
+
+        with left_col:
+            st.markdown("### Signal Summary")
+            st.dataframe(
+                profile["signal_summary"],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "avg_confidence": st.column_config.ProgressColumn("Avg Confidence", min_value=0, max_value=1),
+                    "avg_impact": st.column_config.ProgressColumn("Avg Impact", min_value=0, max_value=1),
+                    "avg_urgency": st.column_config.ProgressColumn("Avg Urgency", min_value=0, max_value=1),
+                },
+            )
+
+        with right_col:
+            st.markdown("### Source Summary")
+            st.dataframe(
+                profile["source_summary"],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("### Related Recommendations")
+        if profile["recommendations"].empty:
+            st.info("No related recommendations found.")
+        else:
+            st.dataframe(
+                profile["recommendations"][["id", "priority", "confidence_score", "title", "recommendation"]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "confidence_score": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1),
+                },
+            )
+
+        st.markdown("### Top Opportunities")
+        if profile["opportunities"].empty:
+            st.info("No opportunity signals found for this section.")
+        else:
+            st.dataframe(
+                profile["opportunities"][[
+                    "signal_type", "topic", "title", "confidence_score",
+                    "impact_score", "urgency_score", "source_name", "url"
+                ]].head(12),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "confidence_score": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1),
+                    "impact_score": st.column_config.ProgressColumn("Impact", min_value=0, max_value=1),
+                    "urgency_score": st.column_config.ProgressColumn("Urgency", min_value=0, max_value=1),
+                },
+            )
+
+        st.markdown("### Top Risks")
+        if profile["risks"].empty:
+            st.info("No risk signals found for this section.")
+        else:
+            st.dataframe(
+                profile["risks"][[
+                    "signal_type", "topic", "title", "confidence_score",
+                    "impact_score", "urgency_score", "source_name", "url"
+                ]].head(12),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "confidence_score": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1),
+                    "impact_score": st.column_config.ProgressColumn("Impact", min_value=0, max_value=1),
+                    "urgency_score": st.column_config.ProgressColumn("Urgency", min_value=0, max_value=1),
+                },
+            )
+
+        st.markdown("### Recent Evidence Documents")
+        if profile["documents"].empty:
+            st.info("No documents found for this section.")
+        else:
+            st.dataframe(
+                profile["documents"][[
+                    "id", "title", "source_name", "source_type", "topic", "trust_score", "url"
+                ]].head(30),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("### Ask AERO-CEO About This Section")
+
+        section_question = st.text_area(
+            "Business-unit CEO question",
+            value=f"What should Airbus CEO prioritize next for {selected_unit}, and why?",
+            height=90,
+            key="business_unit_question",
+        )
+
+        if st.button("Ask About Selected Section", type="primary"):
+            with st.spinner("AERO-CEO is generating a section-specific answer..."):
+                try:
+                    agent = get_ceo_agent()
+                    result = agent.answer(section_question, top_k=8)
+                    st.session_state["latest_business_unit_answer"] = result
+                except Exception as exc:
+                    st.error(f"Business unit Q&A failed: {exc}")
+
+        if "latest_business_unit_answer" in st.session_state:
+            result = st.session_state["latest_business_unit_answer"]
+            route = result.get("route", {})
+
+            st.markdown("#### Section-Specific CEO Answer")
+            a, b, c = st.columns(3)
+            a.metric("Intent", route.get("intent", "unknown"))
+            b.metric("Confidence", result.get("confidence", 0))
+            c.metric("Evidence Items", result.get("evidence_count", 0))
+
+            st.markdown(result["answer_markdown"])
+
+    except Exception as exc:
+        st.error(f"Business Unit Strategy tab failed: {exc}")
+
+
 
 with tab_opportunity:
     st.subheader("Opportunity Monitor")

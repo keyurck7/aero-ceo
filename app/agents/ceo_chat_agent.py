@@ -12,6 +12,7 @@ from app.agents.query_router import route_query
 from app.db.local_db import get_connection, init_local_db
 from app.db.chat_schema import ensure_ceo_chat_tables
 from app.retrieval.search_engine import AeroSearchEngine
+from app.agents.llm_strategy_writer import generate_llm_strategy_answer
 
 
 PARTNER_CAPABILITY_MAP = {
@@ -172,6 +173,26 @@ class CEOChatAgent:
             partners=partners,
             confidence=confidence,
         )
+
+        if os.getenv("LLM_GENERATION_ENABLED", "false").lower() == "true":
+            try:
+                answer_markdown = generate_llm_strategy_answer(
+                    question=question,
+                    route=route,
+                    evidence=evidence,
+                    signals=signals,
+                    recommendations=recommendations,
+                    partners=partners,
+                    confidence=confidence,
+                    template_answer=answer_markdown,
+                )
+            except Exception as exc:
+                answer_markdown = (
+                    answer_markdown
+                    + "\n\n---\n"
+                    + f"**Local LLM generation warning:** {exc}\n\n"
+                    + "The system returned the deterministic evidence-grounded answer instead."
+                )
 
         self.save_query(
             question=question,
