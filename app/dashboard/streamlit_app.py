@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from app.agents.ceo_chat_agent import CEOChatAgent
 from app.intelligence.business_unit_strategy import BUSINESS_UNITS, build_business_unit_profile, generate_profile_markdown
+from app.intelligence.data_quality_audit import get_core_tables, calculate_quality_scores, source_type_summary, topic_coverage_summary, recommendation_evidence_audit, data_gaps, generate_audit_markdown
 from app.agents.recommendation_drilldown import DRILLDOWN_ACTIONS, build_drilldown_question
 
 load_dotenv()
@@ -134,11 +135,12 @@ if not recommendations_df.empty:
         ascending=[True, False]
     )
 
-tab_overview, tab_market, tab_units, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_scenario, tab_evidence, tab_system = st.tabs(
+tab_overview, tab_market, tab_units, tab_quality, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_scenario, tab_evidence, tab_system = st.tabs(
     [
         "Executive Overview",
         "Market Intelligence",
         "Business Unit Strategy",
+        "Data Quality Audit",
         "Opportunity Monitor",
         "Risk Monitor",
         "Sentiment Analysis",
@@ -392,6 +394,98 @@ with tab_units:
 
     except Exception as exc:
         st.error(f"Business Unit Strategy tab failed: {exc}")
+
+
+
+with tab_quality:
+    st.subheader("Data Quality Audit")
+
+    st.caption(
+        "This audit explains whether AERO-CEO has enough source diversity, document volume, "
+        "chunk coverage, strategic signals, and evidence links to support executive recommendations."
+    )
+
+    try:
+        audit_tables = get_core_tables()
+        quality_scores = calculate_quality_scores(audit_tables)
+
+        q1, q2, q3, q4, q5 = st.columns(5)
+        q1.metric("Documents", quality_scores["document_count"])
+        q2.metric("Sources", quality_scores["source_count"])
+        q3.metric("Chunks", quality_scores["chunk_count"])
+        q4.metric("Signals", quality_scores["signal_count"])
+        q5.metric("Quality Score", quality_scores["overall_quality_score"])
+
+        q6, q7, q8, q9 = st.columns(4)
+        q6.metric("Recommendations", quality_scores["recommendation_count"])
+        q7.metric("Evidence Links", quality_scores["evidence_count"])
+        q8.metric("Evidence / Recommendation", quality_scores["evidence_per_recommendation"])
+        q9.metric("Avg Trust", quality_scores["avg_document_trust"])
+
+        st.markdown("### Quality Score Breakdown")
+
+        score_rows = [
+            {"Metric": "Source Diversity", "Score": quality_scores["source_diversity_score"], "Meaning": "Number of independent sources"},
+            {"Metric": "Document Volume", "Score": quality_scores["document_volume_score"], "Meaning": "Corpus size versus 100-document target"},
+            {"Metric": "Chunking", "Score": quality_scores["chunking_score"], "Meaning": "Documents converted into searchable chunks"},
+            {"Metric": "Signal Extraction", "Score": quality_scores["signal_score"], "Meaning": "Strategic signals per document"},
+            {"Metric": "Evidence Linking", "Score": quality_scores["evidence_link_score"], "Meaning": "Evidence links per recommendation"},
+            {"Metric": "Trust", "Score": quality_scores["trust_score"], "Meaning": "Average source trust score"},
+            {"Metric": "Topic Coverage", "Score": quality_scores["topic_coverage_score"], "Meaning": "Strategic topic breadth"},
+        ]
+
+        score_df = pd.DataFrame(score_rows)
+
+        st.dataframe(
+            score_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=1),
+            },
+        )
+
+        st.markdown("### Source Type Summary")
+        st.dataframe(
+            source_type_summary(audit_tables["documents"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("### Topic Coverage Summary")
+        st.dataframe(
+            topic_coverage_summary(audit_tables["documents"], audit_tables["signals"]),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "avg_signal_confidence": st.column_config.ProgressColumn("Avg Signal Confidence", min_value=0, max_value=1),
+                "avg_impact": st.column_config.ProgressColumn("Avg Impact", min_value=0, max_value=1),
+            },
+        )
+
+        st.markdown("### Recommendation Evidence Audit")
+        st.dataframe(
+            recommendation_evidence_audit(audit_tables["recommendations"], audit_tables["evidence"]),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "confidence_score": st.column_config.ProgressColumn("Recommendation Confidence", min_value=0, max_value=1),
+                "avg_evidence_strength": st.column_config.ProgressColumn("Avg Evidence Strength", min_value=0, max_value=1),
+            },
+        )
+
+        st.markdown("### Data Gaps")
+        gaps = data_gaps(audit_tables["documents"])
+        if gaps.empty:
+            st.success("No major data gaps found.")
+        else:
+            st.dataframe(gaps, use_container_width=True, hide_index=True)
+
+        st.markdown("### Audit Summary")
+        st.markdown(generate_audit_markdown())
+
+    except Exception as exc:
+        st.error(f"Data Quality Audit failed: {exc}")
 
 
 
