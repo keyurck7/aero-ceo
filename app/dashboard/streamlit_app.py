@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from app.agents.ceo_chat_agent import CEOChatAgent
 from app.intelligence.business_unit_strategy import BUSINESS_UNITS, build_business_unit_profile, generate_profile_markdown
 from app.intelligence.data_quality_audit import get_core_tables, calculate_quality_scores, source_type_summary, topic_coverage_summary, recommendation_evidence_audit, data_gaps, generate_audit_markdown
+from app.evaluation.evaluation_suite import run_full_evaluation, report_to_markdown
 from app.agents.recommendation_drilldown import DRILLDOWN_ACTIONS, build_drilldown_question
 
 load_dotenv()
@@ -135,12 +136,13 @@ if not recommendations_df.empty:
         ascending=[True, False]
     )
 
-tab_overview, tab_market, tab_units, tab_quality, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_scenario, tab_evidence, tab_system = st.tabs(
+tab_overview, tab_market, tab_units, tab_quality, tab_eval, tab_opportunity, tab_risk, tab_sentiment, tab_recommendations, tab_ask, tab_scenario, tab_evidence, tab_system = st.tabs(
     [
         "Executive Overview",
         "Market Intelligence",
         "Business Unit Strategy",
         "Data Quality Audit",
+        "Evaluation & Guardrails",
         "Opportunity Monitor",
         "Risk Monitor",
         "Sentiment Analysis",
@@ -486,6 +488,68 @@ with tab_quality:
 
     except Exception as exc:
         st.error(f"Data Quality Audit failed: {exc}")
+
+
+
+with tab_eval:
+    st.subheader("Evaluation & Guardrails")
+
+    st.caption(
+        "Run readiness checks for corpus size, source diversity, retrieval, recommendations, evidence links, "
+        "CEO Q&A, and weak-evidence behavior."
+    )
+
+    eval_col1, eval_col2 = st.columns([1, 2])
+
+    with eval_col1:
+        include_retrieval = st.checkbox(
+            "Include semantic retrieval probes",
+            value=True,
+            help="This loads the FAISS search engine and checks whether strategic queries retrieve relevant evidence.",
+        )
+
+    run_eval = st.button("Run Evaluation", type="primary")
+
+    if run_eval:
+        with st.spinner("Running AERO-CEO evaluation checks..."):
+            try:
+                eval_report = run_full_evaluation(include_retrieval=include_retrieval)
+                st.session_state["latest_eval_report"] = eval_report
+            except Exception as exc:
+                st.error(f"Evaluation failed: {exc}")
+
+    if "latest_eval_report" in st.session_state:
+        eval_report = st.session_state["latest_eval_report"]
+        summary = eval_report["summary"]
+        checks_df = pd.DataFrame(eval_report["checks"])
+
+        st.markdown("### Readiness Summary")
+
+        e1, e2, e3, e4, e5 = st.columns(5)
+        e1.metric("Total Checks", summary["total_checks"])
+        e2.metric("Passed", summary["passed"])
+        e3.metric("Failed", summary["failed"])
+        e4.metric("Score", summary["evaluation_score"])
+        e5.metric("Readiness", summary["readiness"])
+
+        st.markdown("### Check Results")
+
+        st.dataframe(
+            checks_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        failed_checks = checks_df[checks_df["status"] == "FAIL"]
+
+        if failed_checks.empty:
+            st.success("All active evaluation checks passed.")
+        else:
+            st.warning("Some checks failed. Review details before final demo.")
+            st.dataframe(failed_checks, use_container_width=True, hide_index=True)
+
+        st.markdown("### Markdown Audit")
+        st.markdown(report_to_markdown(eval_report))
 
 
 

@@ -194,6 +194,16 @@ class CEOChatAgent:
                     + "The system returned the deterministic evidence-grounded answer instead."
                 )
 
+        if len(evidence) < 2 or confidence < 0.45:
+            guardrail_note = (
+                "\n\n---\n"
+                "## Evidence Sufficiency Guardrail\n"
+                "AERO-CEO found limited supporting evidence for this answer. "
+                "Treat the response as exploratory rather than decision-ready. "
+                "Collect more sources or broaden the query before making an executive decision.\n"
+            )
+            answer_markdown = answer_markdown + guardrail_note
+
         self.save_query(
             question=question,
             route=route,

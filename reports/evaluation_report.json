@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-06-23T00:27:33",
+  "summary": {
+    "total_checks": 14,
+    "passed": 13,
+    "failed": 1,
+    "evaluation_score": 0.929,
+    "readiness": "Production-demo ready"
+  },
+  "checks": [
+    {
+      "check": "Minimum document volume",
+      "status": "PASS",
+      "value": 190,
+      "threshold": ">= 100",
+      "details": "The corpus must be large enough to support strategic analysis."
+    },
+    {
+      "check": "Minimum source diversity",
+      "status": "PASS",
+      "value": 143,
+      "threshold": ">= 3",
+      "details": "The system should not depend on only one source."
+    },
+    {
+      "check": "Documents are chunked",
+      "status": "PASS",
+      "value": 199,
+      "threshold": ">= document count 190",
+      "details": "Chunking is required for reliable retrieval."
+    },
+    {
+      "check": "Strategic signals exist",
+      "status": "PASS",
+      "value": 609,
+      "threshold": ">= 50",
+      "details": "The system should extract opportunities, risks, and trends."
+    },
+    {
+      "check": "CEO recommendations exist",
+      "status": "PASS",
+      "value": 6,
+      "threshold": ">= 3",
+      "details": "The CEO agent needs multiple executive recommendations."
+    },
+    {
+      "check": "Evidence per recommendation",
+      "status": "PASS",
+      "value": 8.0,
+      "threshold": ">= 3",
+      "details": "Recommendations should be evidence-backed."
+    },
+    {
+      "check": "No unsupported recommendations",
+      "status": "PASS",
+      "value": 0,
+      "threshold": "0",
+      "details": "Every recommendation should have at least one evidence link."
+    },
+    {
+      "check": "CEO Q&A sessions stored",
+      "status": "PASS",
+      "value": 10,
+      "threshold": ">= 1",
+      "details": "The CEO should be able to interrogate the system."
+    },
+    {
+      "check": "CEO answers use evidence",
+      "status": "PASS",
+      "value": 0,
+      "threshold": "0 weak answers",
+      "details": "Stored CEO answers should normally include retrieved evidence."
+    },
+    {
+      "check": "Retrieval probe: FCAS partner risk Dassault future fighter",
+      "status": "PASS",
+      "value": "5 results, avg score 0.696, matched ['fcas', 'fighter']",
+      "threshold": ">= 1 relevant result",
+      "details": "Semantic memory should retrieve evidence relevant to strategic queries."
+    },
+    {
+      "check": "Retrieval probe: SIRTAP uncrewed aircraft opportunity Airbus",
+      "status": "PASS",
+      "value": "5 results, avg score 0.756, matched ['sirtap', 'uncrewed', 'airbus']",
+      "threshold": ">= 1 relevant result",
+      "details": "Semantic memory should retrieve evidence relevant to strategic queries."
+    },
+    {
+      "check": "Retrieval probe: military space secure communications Airbus",
+      "status": "PASS",
+      "value": "5 results, avg score 0.792, matched ['space', 'satellite', 'communications']",
+      "threshold": ">= 1 relevant result",
+      "details": "Semantic memory should retrieve evidence relevant to strategic queries."
+    },
+    {
+      "check": "Retrieval probe: Eurofighter modernization uncrewed teaming",
+      "status": "PASS",
+      "value": "5 results, avg score 0.642, matched ['eurofighter', 'typhoon', 'uncrewed']",
+      "threshold": ">= 1 relevant result",
+      "details": "Semantic memory should retrieve evidence relevant to strategic queries."
+    },
+    {
+      "check": "Retrieval probe: Airbus defence supply chain delivery risk",
+      "status": "FAIL",
+      "value": "5 results, avg score 0.698, matched []",
+      "threshold": ">= 1 relevant result",
+      "details": "Semantic memory should retrieve evidence relevant to strategic queries."
+    }
+  ]
+}
