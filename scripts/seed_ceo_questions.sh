@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
-echo "Seeding CEO Q&A demo questions..."
+echo "=== Seeding CEO Q&A demo questions ==="
+
+# Keep rebuild fast. Live Streamlit can still use LLM after rebuild.
+export LLM_GENERATION_ENABLED=false
 
 bash scripts/ask_ceo.sh "Should Airbus collaborate with another European organization for sixth-generation fighter systems?"
 bash scripts/ask_ceo.sh "What are the biggest risks if FCAS is delayed?"
@@ -10,4 +13,4 @@ bash scripts/ask_ceo.sh "Explain the recommendation about military space and sec
 bash scripts/ask_ceo.sh "Which partner could help Airbus in Spain for SIRTAP and uncrewed systems?"
 bash scripts/ask_ceo.sh "What is the lower-risk version of investing in future combat systems?"
 
-echo "CEO Q&A demo questions seeded."
+echo "=== CEO Q&A demo questions seeded ==="

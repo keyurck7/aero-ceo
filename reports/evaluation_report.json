@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-06-23T00:27:33",
+  "generated_at": "2026-06-23T00:59:20",
   "summary": {
     "total_checks": 14,
-    "passed": 13,
-    "failed": 1,
-    "evaluation_score": 0.929,
+    "passed": 14,
+    "failed": 0,
+    "evaluation_score": 1.0,
     "readiness": "Production-demo ready"
   },
   "checks": [
@@ -18,7 +18,7 @@
     {
       "check": "Minimum source diversity",
       "status": "PASS",
-      "value": 143,
+      "value": 136,
       "threshold": ">= 3",
       "details": "The system should not depend on only one source."
     },
@@ -32,7 +32,7 @@
     {
       "check": "Strategic signals exist",
       "status": "PASS",
-      "value": 609,
+      "value": 595,
       "threshold": ">= 50",
       "details": "The system should extract opportunities, risks, and trends."
     },
@@ -60,7 +60,7 @@
     {
       "check": "CEO Q&A sessions stored",
       "status": "PASS",
-      "value": 10,
+      "value": 6,
       "threshold": ">= 1",
       "details": "The CEO should be able to interrogate the system."
     },
@@ -74,7 +74,7 @@
     {
       "check": "Retrieval probe: FCAS partner risk Dassault future fighter",
       "status": "PASS",
-      "value": "5 results, avg score 0.696, matched ['fcas', 'fighter']",
+      "value": "5 results, avg score 0.698, matched ['fcas', 'fighter']",
       "threshold": ">= 1 relevant result",
       "details": "Semantic memory should retrieve evidence relevant to strategic queries."
     },
@@ -88,21 +88,21 @@
     {
       "check": "Retrieval probe: military space secure communications Airbus",
       "status": "PASS",
-      "value": "5 results, avg score 0.792, matched ['space', 'satellite', 'communications']",
+      "value": "5 results, avg score 0.789, matched ['space', 'satellite', 'communications']",
       "threshold": ">= 1 relevant result",
       "details": "Semantic memory should retrieve evidence relevant to strategic queries."
     },
     {
       "check": "Retrieval probe: Eurofighter modernization uncrewed teaming",
       "status": "PASS",
-      "value": "5 results, avg score 0.642, matched ['eurofighter', 'typhoon', 'uncrewed']",
+      "value": "5 results, avg score 0.64, matched ['eurofighter', 'typhoon', 'uncrewed']",
       "threshold": ">= 1 relevant result",
       "details": "Semantic memory should retrieve evidence relevant to strategic queries."
     },
     {
-      "check": "Retrieval probe: Airbus defence supply chain delivery risk",
-      "status": "FAIL",
-      "value": "5 results, avg score 0.698, matched []",
+      "check": "Retrieval probe: A400M C295 MRTT Airbus defence production delivery execution risk",
+      "status": "PASS",
+      "value": "5 results, avg score 0.708, matched ['a400m', 'c295', 'mrtt']",
       "threshold": ">= 1 relevant result",
       "details": "Semantic memory should retrieve evidence relevant to strategic queries."
     }

@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
+from app.dashboard.demo_control import DEMO_QUESTIONS, DEMO_FLOW, get_system_status, readiness_label, demo_script_short
 
 from app.agents.ceo_chat_agent import CEOChatAgent
 from app.intelligence.business_unit_strategy import BUSINESS_UNITS, build_business_unit_profile, generate_profile_markdown
@@ -23,6 +24,48 @@ st.set_page_config(
     page_icon="✈️",
     layout="wide",
 )
+
+
+# ---------------------------------------------------------------------
+# Demo control sidebar
+# ---------------------------------------------------------------------
+system_status = get_system_status()
+system_readiness = readiness_label(system_status)
+
+with st.sidebar:
+    st.title("AERO-CEO")
+    st.caption("Strategic Intelligence Agent for Airbus SE")
+
+    st.markdown("### Demo Status")
+    st.write(f"**Readiness:** {system_readiness}")
+    st.write(f"**Database:** {'Available' if system_status['database_exists'] else 'Missing'}")
+    st.write(f"**FAISS index:** {'Available' if system_status['faiss_exists'] else 'Missing'}")
+    st.write(f"**Local LLM:** {'Enabled' if system_status['llm_enabled'] else 'Disabled'}")
+    st.write(f"**Model:** {system_status['llm_model']}")
+
+    st.markdown("### Core Counts")
+    st.metric("Documents", system_status["documents"])
+    st.metric("Signals", system_status["signals"])
+    st.metric("Recommendations", system_status["recommendations"])
+    st.metric("Evidence Links", system_status["evidence_links"])
+    st.metric("CEO Q&A", system_status["ceo_queries"])
+
+    st.markdown("### Recommended Demo Flow")
+    for step in DEMO_FLOW:
+        st.write(f"• {step}")
+
+    st.markdown("### Quick Recovery")
+    st.code("bash scripts/rebuild_demo.sh --clean", language="bash")
+    st.code("bash scripts/run_streamlit.sh", language="bash")
+
+    st.markdown("### Strong CEO Questions")
+    sidebar_question = st.selectbox(
+        "Copy a demo question",
+        DEMO_QUESTIONS,
+        key="sidebar_demo_question",
+    )
+    st.caption(sidebar_question)
+
 
 
 def get_connection():
@@ -90,6 +133,25 @@ st.caption(
     "Executive intelligence dashboard focused on Airbus Defence and Space, "
     "fighter systems, uncrewed aircraft, FCAS, Eurofighter, military space, and European defence autonomy."
 )
+
+
+st.markdown("""
+### Executive Mission
+
+AERO-CEO is an evidence-grounded strategic intelligence system for Airbus SE.  
+It converts live public information into searchable evidence, strategic signals, CEO recommendations, scenario analysis, and interactive executive Q&A.
+
+**Operating principle:** no recommendation without evidence, no evidence without source metadata, and no CEO answer without confidence and guardrails.
+""")
+
+if system_readiness != "Demo ready":
+    st.warning(
+        f"System readiness is currently: {system_readiness}. "
+        "If data or FAISS files are missing, run `bash scripts/rebuild_demo.sh --clean`."
+    )
+else:
+    st.success("System is demo ready. Use the sidebar flow for the presentation path.")
+
 
 # Load core tables
 documents_df = read_df("""
@@ -803,14 +865,7 @@ with tab_ask:
     q2.metric("Repository", "FAISS + SQLite")
     q3.metric("Agent", "CEO Strategic Advisor")
 
-    example_questions = [
-        "Should Airbus collaborate with another European organization for sixth-generation fighter systems?",
-        "What are the biggest risks if FCAS is delayed?",
-        "What should Airbus do if budget is limited but it still wants to compete in uncrewed combat aircraft?",
-        "Explain the recommendation about military space and secure communications with evidence.",
-        "Which partner could help Airbus in Spain for SIRTAP and uncrewed systems?",
-        "What is the lower-risk version of investing in future combat systems?",
-    ]
+    example_questions = DEMO_QUESTIONS
 
     selected_example = st.selectbox(
         "Choose an example CEO question",
