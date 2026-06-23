@@ -34,8 +34,8 @@ RETRIEVAL_PROBES = [
         "expected_terms": ["eurofighter", "typhoon", "uncrewed"],
     },
     {
-        "query": "Airbus defence supply chain delivery risk",
-        "expected_terms": ["supply", "delivery", "risk"],
+        "query": "A400M C295 MRTT Airbus defence production delivery execution risk",
+        "expected_terms": ["a400m", "c295", "mrtt", "delivery", "production", "execution", "risk"],
     },
 ]
 
