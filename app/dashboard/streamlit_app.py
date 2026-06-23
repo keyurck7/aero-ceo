@@ -863,6 +863,173 @@ with tab_ask:
 
 
 with tab_evidence:
+
+    st.subheader("Evidence Explorer")
+
+    st.markdown("### Semantic Evidence Search")
+
+    st.caption(
+        "Search the FAISS vector memory directly. This lets the CEO, examiner, or analyst inspect the evidence "
+        "behind recommendations, CEO answers, risks, opportunities, and scenarios."
+    )
+
+    sem_col1, sem_col2, sem_col3 = st.columns([2, 1, 1])
+
+    with sem_col1:
+        semantic_query = st.text_input(
+            "Semantic search query",
+            value="FCAS partner risk Dassault future fighter",
+            placeholder="Example: SIRTAP uncrewed aircraft opportunity for Airbus",
+            key="semantic_evidence_query",
+        )
+
+    with sem_col2:
+        semantic_topic = st.selectbox(
+            "Topic filter",
+            ["All"] + sorted(documents_df["topic"].dropna().unique().tolist()),
+            key="semantic_topic_filter",
+        )
+
+    with sem_col3:
+        semantic_source_type = st.selectbox(
+            "Source type filter",
+            ["All"] + sorted(documents_df["source_type"].dropna().unique().tolist()),
+            key="semantic_source_filter",
+        )
+
+    sem_col4, sem_col5, sem_col6 = st.columns([1, 1, 2])
+
+    with sem_col4:
+        semantic_top_k = st.slider(
+            "Top K",
+            min_value=3,
+            max_value=20,
+            value=8,
+            step=1,
+            key="semantic_top_k",
+        )
+
+    with sem_col5:
+        min_score = st.slider(
+            "Min score",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.05,
+            key="semantic_min_score",
+        )
+
+    search_semantic_button = st.button("Search Semantic Memory", type="primary")
+
+    if search_semantic_button:
+        if not semantic_query.strip():
+            st.warning("Enter a semantic search query first.")
+        else:
+            with st.spinner("Searching FAISS evidence memory..."):
+                try:
+                    agent = get_ceo_agent()
+
+                    if not agent.search_engine:
+                        st.error("FAISS search engine is not available. Rebuild with: python -m app.retrieval.build_faiss_index")
+                    else:
+                        semantic_results = agent.search_engine.search(
+                            query=semantic_query.strip(),
+                            top_k=semantic_top_k,
+                            topic=None if semantic_topic == "All" else semantic_topic,
+                            source_type=None if semantic_source_type == "All" else semantic_source_type,
+                        )
+
+                        semantic_results = [
+                            item for item in semantic_results
+                            if float(item.get("score") or 0) >= min_score
+                        ]
+
+                        st.session_state["latest_semantic_results"] = semantic_results
+                        st.session_state["latest_semantic_query"] = semantic_query.strip()
+
+                except Exception as exc:
+                    st.error(f"Semantic search failed: {exc}")
+
+    if "latest_semantic_results" in st.session_state:
+        semantic_results = st.session_state["latest_semantic_results"]
+        semantic_query_used = st.session_state.get("latest_semantic_query", "")
+
+        st.markdown("### Semantic Search Results")
+        st.write(f"Query: **{semantic_query_used}**")
+        st.metric("Results", len(semantic_results))
+
+        if not semantic_results:
+            st.info("No semantic results matched the query and filters.")
+        else:
+            results_table = pd.DataFrame([
+                {
+                    "rank": idx + 1,
+                    "score": round(float(item.get("score") or 0), 3),
+                    "topic": item.get("topic"),
+                    "source_type": item.get("source_type"),
+                    "source_name": item.get("source_name"),
+                    "title": item.get("title"),
+                    "url": item.get("url"),
+                }
+                for idx, item in enumerate(semantic_results)
+            ])
+
+            st.dataframe(
+                results_table,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=1),
+                },
+            )
+
+            st.markdown("### Evidence Chunks")
+
+            for idx, item in enumerate(semantic_results, start=1):
+                title = item.get("title") or "Untitled evidence"
+                score = float(item.get("score") or 0)
+                topic = item.get("topic") or "Unknown topic"
+                source_name = item.get("source_name") or "Unknown source"
+
+                with st.expander(f"{idx}. score {score:.3f} | {topic} | {source_name} | {title[:90]}"):
+                    st.write(f"**Source type:** {item.get('source_type')}")
+                    st.write(f"**URL:** {item.get('url')}")
+                    st.write(f"**Document ID:** {item.get('document_id')} | **Chunk ID:** {item.get('chunk_id')}")
+                    st.markdown("**Evidence text:**")
+                    st.info(item.get("chunk_text", ""))
+
+            st.markdown("### Ask AERO-CEO Using This Evidence Topic")
+
+            followup_question = st.text_area(
+                "Follow-up CEO question based on search",
+                value=f"Based on evidence about {semantic_query_used}, what should Airbus do next and why?",
+                height=90,
+                key="semantic_followup_question",
+            )
+
+            if st.button("Ask AERO-CEO From Evidence Search"):
+                with st.spinner("AERO-CEO is answering using the evidence topic..."):
+                    try:
+                        agent = get_ceo_agent()
+                        result = agent.answer(followup_question, top_k=8)
+                        st.session_state["latest_semantic_followup_answer"] = result
+                    except Exception as exc:
+                        st.error(f"Evidence-based follow-up failed: {exc}")
+
+            if "latest_semantic_followup_answer" in st.session_state:
+                result = st.session_state["latest_semantic_followup_answer"]
+                route = result.get("route", {})
+
+                st.markdown("#### Evidence-Based CEO Follow-up Answer")
+                f1, f2, f3 = st.columns(3)
+                f1.metric("Intent", route.get("intent", "unknown"))
+                f2.metric("Confidence", result.get("confidence", 0))
+                f3.metric("Evidence Items", result.get("evidence_count", 0))
+
+                st.markdown(result["answer_markdown"])
+
+    st.markdown("---")
+    st.markdown("### Keyword Evidence Browser")
     st.subheader("Evidence Explorer")
 
     query = st.text_input("Search evidence by keyword", value="")
