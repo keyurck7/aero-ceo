@@ -22,6 +22,9 @@ class AgentState(TypedDict, total=False):
     topic: str
     topic_confidence: float
     business_area: str
+    scope_status: str
+    domain_relevance: float
+    rejection_reason: str
 
     # Planning
     plan: List[Dict[str, Any]]

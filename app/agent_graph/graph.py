@@ -57,10 +57,13 @@ def node_classify_goal(state: AgentState) -> Dict[str, Any]:
         "topic": result["topic"],
         "topic_confidence": result["topic_confidence"],
         "business_area": result["business_area"],
+        "scope_status": result.get("scope_status", "in_scope"),
+        "domain_relevance": result.get("domain_relevance", 0.0),
+        "rejection_reason": result.get("rejection_reason", ""),
         "tool_trace": _append_trace(
             state,
             "Goal Understanding",
-            "embedding_intent_classifier",
+            "Goal Understanding Tool",
             "completed",
             json.dumps(result, ensure_ascii=False),
         ),
@@ -143,7 +146,7 @@ def node_build_plan(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Planning",
-            "deterministic_plan_builder",
+            "Planning Tool",
             "completed",
             f"Built plan for intent={intent}, topic={topic}",
         ),
@@ -163,7 +166,7 @@ def node_retrieve_evidence(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Retrieve",
-            "semantic_retrieval_tool_FAISS",
+            "Semantic Retrieval Tool",
             "completed",
             f"Retrieved {len(evidence)} evidence chunks for query: {retrieval_query}",
         ),
@@ -191,7 +194,7 @@ def node_analyze_context(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Analyze",
-            "signal_analysis_tool_SQLite",
+            "Strategic Signal Analysis Tool",
             "completed",
             (
                 f"Signals={len(signals)}, "
@@ -269,7 +272,7 @@ def node_decide_strategy(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Decide",
-            "deterministic_decision_engine",
+            "Decision Engine",
             "completed",
             json.dumps(decision, ensure_ascii=False),
         ),
@@ -285,7 +288,7 @@ def node_validate_output(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Validate",
-            "evidence_quality_gate",
+            "Evidence Quality Validation Gate",
             validation["status"],
             json.dumps(validation, ensure_ascii=False),
         ),
@@ -307,164 +310,235 @@ def _format_items(items: List[Dict[str, Any]], label_keys: List[str], max_items:
 
 
 def _deterministic_briefing(state: AgentState) -> str:
+    """
+    Create a CEO-facing briefing.
+
+    This is for the CEO, not for debugging. Internal workflow details belong
+    in the Agent Workflow tab.
+    """
     goal = state.get("goal", "")
     intent = state.get("intent", "")
     topic = state.get("topic", "")
     business_area = state.get("business_area", "")
+
     evidence = state.get("evidence", []) or []
     risks = state.get("risks", []) or []
     opportunities = state.get("opportunities", []) or []
     trends = state.get("trends", []) or []
     partners = state.get("partners", []) or []
     recommendations = state.get("recommendations", []) or []
+
     decision = state.get("decision", {}) or {}
     validation = state.get("validation", {}) or {}
-    plan = state.get("plan", []) or []
+
+    strategic_direction = decision.get(
+        "strategic_direction",
+        "Prioritize an evidence-backed strategic response."
+    )
+    expected_impact = decision.get(
+        "expected_impact",
+        "Expected impact should be validated through follow-up analysis."
+    )
+    risk_assessment = decision.get(
+        "risk_assessment",
+        "Risks should be monitored through the risk dashboard."
+    )
+
+    options = decision.get("decision_options", {}) or {}
+
+    validation_status = validation.get("status", "UNKNOWN")
+    confidence = validation.get("confidence", 0)
+    evidence_quality = validation.get("evidence_quality", "unknown")
+    human_review = validation.get("human_review_required", True)
+
+    def pick_label(item):
+        for key in ["title", "signal_title", "recommendation", "description", "evidence_text"]:
+            value = item.get(key)
+            if value:
+                return str(value)
+        return str(item)[:180]
+
+    def numbered(items, max_items=4):
+        if not items:
+            return "No strong items found in current memory."
+        lines = []
+        for i, item in enumerate(items[:max_items], start=1):
+            lines.append(f"{i}. {pick_label(item)}")
+        return "\n".join(lines)
 
     evidence_lines = []
     for e in evidence[:5]:
-        title = e.get("title", "Untitled")
-        source = e.get("source", "Unknown")
+        title = e.get("title", "Untitled evidence")
+        source = e.get("source", "Unknown source")
         score = e.get("score", 0)
         url = e.get("url", "")
-        evidence_lines.append(f"- **{title}** | Source: {source} | Score: {score} | {url}")
+
+        line = f"- **{title}** | Source: {source} | Relevance: {score}"
+        if url:
+            line += f" | {url}"
+        evidence_lines.append(line)
 
     if not evidence_lines:
         evidence_lines.append("- No evidence retrieved.")
 
     partner_section = ""
     if partners:
-        partner_rows = []
+        partner_lines = []
         for p in partners[:5]:
-            partner_rows.append(
-                f"- **{p.get('partner')}** ({p.get('country')}): {p.get('capability')}. "
-                f"Use case: {p.get('collaboration_area')}. Risk: {p.get('risk')}."
+            partner_lines.append(
+                "- **{partner}** ({country}): {capability}. Best use: {area}. Main risk: {risk}.".format(
+                    partner=p.get("partner", "Unknown partner"),
+                    country=p.get("country", "Unknown country"),
+                    capability=p.get("capability", "Capability not available"),
+                    area=p.get("collaboration_area", "Collaboration area not available"),
+                    risk=p.get("risk", "Risk not available"),
+                )
             )
-        partner_section = "\n\n## Partner options\n" + "\n".join(partner_rows)
+        partner_section = "\n## Partnership options\n" + "\n".join(partner_lines)
 
-    validation_status = validation.get("status", "UNKNOWN")
-    validation_warning = ""
+    recommendation_portfolio = ""
+    if recommendations:
+        rec_lines = []
+        for i, rec in enumerate(recommendations[:5], start=1):
+            rec_title = rec.get("title") or rec.get("recommendation") or "Untitled recommendation"
+            rec_lines.append(f"{i}. {rec_title}")
+        recommendation_portfolio = "\n## Related recommendation portfolio\n" + "\n".join(rec_lines)
+
+    validation_note = ""
     if validation.get("issues") or validation.get("warnings"):
-        validation_warning = "\n\n## Validation notes\n"
+        notes = ["\n## Management caution"]
         for issue in validation.get("issues", []):
-            validation_warning += f"- Issue: {issue}\n"
+            notes.append(f"- Evidence issue: {issue}")
         for warning in validation.get("warnings", []):
-            validation_warning += f"- Warning: {warning}\n"
+            notes.append(f"- Warning: {warning}")
+        validation_note = "\n".join(notes)
 
-    plan_lines = "\n".join(
-        [
-            f"{p.get('step')}. {p.get('name')} - {p.get('purpose')}"
-            for p in plan
-        ]
-    )
+    opening_action = strategic_direction
+    if opening_action:
+        opening_action = opening_action[0].lower() + opening_action[1:]
 
-    briefing = f"""# AERO-CEO Mission Control Briefing
+    sections = [
+        "# CEO Strategic Briefing",
+        "",
+        "## CEO question",
+        goal,
+        "",
+        "## Executive answer",
+        f"Airbus should **{opening_action}**.",
+        "",
+        (
+            f"The strategic context is **{intent}** around **{topic}** in **{business_area}**. "
+            f"The recommendation currently has validation status **{validation_status}**, "
+            f"confidence **{confidence}**, and evidence quality **{evidence_quality}**."
+        ),
+        "",
+        "## What management should do next",
+        f"**{strategic_direction}**",
+        "",
+        "## Why this matters now",
+        (
+            f"{topic} is strategically relevant for Airbus because it affects future defence positioning, "
+            "industrial execution, partner alignment, and European defence competitiveness."
+        ),
+        "",
+        "## Expected impact",
+        expected_impact,
+        "",
+        "## Risk assessment",
+        risk_assessment,
+        "",
+        "## Decision options",
+        f"- **Conservative:** {options.get('conservative', 'Monitor the situation and strengthen evidence before major commitment.')}",
+        f"- **Balanced:** {options.get('balanced', 'Move forward with staged investment and risk controls.')}",
+        f"- **Aggressive:** {options.get('aggressive', 'Accelerate investment or partnership ahead of competitors while accepting higher execution risk.')}",
+        "",
+        "## Key risks to monitor",
+        numbered(risks),
+        "",
+        "## Key opportunities",
+        numbered(opportunities),
+        "",
+        "## Relevant trends",
+        numbered(trends),
+        partner_section,
+        recommendation_portfolio,
+        "",
+        "## Supporting evidence",
+        "\n".join(evidence_lines),
+        "",
+        "## Confidence and governance",
+        f"- Validation status: **{validation_status}**",
+        f"- Evidence quality: **{evidence_quality}**",
+        f"- Human review required: **{human_review}**",
+        "",
+        "The full execution plan, tool calls, and validation trace are available in the **Agent Workflow** tab.",
+        validation_note,
+    ]
 
-## CEO goal
-{goal}
+    return "\n".join([s for s in sections if s is not None])
 
-## Agent understanding
-- Intent: **{intent}**
-- Topic: **{topic}**
-- Business area: **{business_area}**
-
-## Execution plan
-{plan_lines}
-
-## What happened?
-The agent retrieved Airbus-related evidence, analyzed strategic signals, checked existing recommendations, and produced a decision through a deterministic LangGraph workflow.
-
-## Why does it matter?
-The evidence and signal memory indicate that **{topic}** is strategically relevant for Airbus management. The decision should be treated as evidence-grounded but still subject to validation status: **{validation_status}**.
-
-## What should management do next?
-**{decision.get("strategic_direction", "No strategic direction generated.")}**
-
-## Expected impact
-{decision.get("expected_impact", "No expected impact generated.")}
-
-## Risk assessment
-{decision.get("risk_assessment", "No risk assessment generated.")}
-
-## Decision options
-- **Conservative:** {decision.get("decision_options", {}).get("conservative", "Not available.")}
-- **Balanced:** {decision.get("decision_options", {}).get("balanced", "Not available.")}
-- **Aggressive:** {decision.get("decision_options", {}).get("aggressive", "Not available.")}
-
-## Risks detected
-{_format_items(risks, ["title", "signal_title", "description", "evidence_text"])}
-
-## Opportunities detected
-{_format_items(opportunities, ["title", "signal_title", "description", "evidence_text"])}
-
-## Trends detected
-{_format_items(trends, ["title", "signal_title", "description", "evidence_text"])}
-
-## Matching recommendation portfolio
-{_format_items(recommendations, ["title", "recommendation"])}
-
-{partner_section}
-
-## Supporting evidence
-{chr(10).join(evidence_lines)}
-
-## Validation result
-- Status: **{validation_status}**
-- Confidence: **{validation.get("confidence", 0)}**
-- Evidence quality: **{validation.get("evidence_quality", "unknown")}**
-- Human review required: **{validation.get("human_review_required", True)}**
-{validation_warning}
-"""
-    return briefing
 
 
 def node_write_briefing(state: AgentState) -> Dict[str, Any]:
     """
-    Write final CEO briefing.
+    Write the final CEO briefing.
 
-    By default, this is deterministic markdown.
-    If AGENT_GRAPH_LLM_ENABLED=true, we optionally let the local LLM polish the briefing,
-    but only after evidence, decision, and validation exist.
+    Product rule:
+    - Workflow/proof stays in Agent Workflow tab.
+    - CEO Briefing tab gets a board-level strategic answer.
+    - If AGENT_GRAPH_LLM_ENABLED=true, Qwen writes the final answer from the evidence pack.
+    - If the LLM fails or is disabled, we fall back to deterministic briefing.
     """
-    briefing = _deterministic_briefing(state)
-
     llm_enabled = os.getenv("AGENT_GRAPH_LLM_ENABLED", "false").lower() == "true"
 
     if llm_enabled:
         try:
-            from app.agents.local_llm import get_local_llm
+            from app.agent_graph.executive_writer import generate_executive_briefing_with_llm
 
-            llm = get_local_llm()
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are AERO-CEO, an evidence-grounded strategic intelligence agent. "
-                        "Rewrite the provided deterministic briefing into a polished CEO briefing. "
-                        "Do not add facts not present in the briefing. Keep validation warnings."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": briefing,
-                },
-            ]
-            polished = llm.generate(messages)
-            if polished and len(polished.strip()) > 100:
-                briefing = polished.strip()
+            briefing = generate_executive_briefing_with_llm(state)
+
+            return {
+                "briefing": briefing,
+                "tool_trace": _append_trace(
+                    state,
+                    "Brief",
+                    "Executive Writer Tool",
+                    "completed",
+                    "Generated CEO-facing briefing from structured evidence pack.",
+                ),
+            }
+
         except Exception as exc:
-            briefing += f"\n\n## LLM polishing note\nLocal LLM polishing failed, so deterministic briefing was used. Error: {exc}\n"
+            fallback = _deterministic_briefing(state)
+            fallback += (
+                "\n\n## Generation fallback note\n"
+                f"Local LLM executive writing failed, so deterministic briefing was used. Error: {exc}\n"
+            )
+
+            return {
+                "briefing": fallback,
+                "tool_trace": _append_trace(
+                    state,
+                    "Brief",
+                    "Executive Writer Fallback",
+                    "warning",
+                    f"LLM executive writer failed: {exc}",
+                ),
+            }
+
+    briefing = _deterministic_briefing(state)
 
     return {
         "briefing": briefing,
         "tool_trace": _append_trace(
             state,
             "Brief",
-            "ceo_briefing_writer",
+            "Deterministic Executive Writer",
             "completed",
-            f"Generated briefing. LLM polishing enabled={llm_enabled}",
+            "Generated deterministic CEO-facing briefing. LLM disabled.",
         ),
     }
+
 
 
 def node_save_trace(state: AgentState) -> Dict[str, Any]:
@@ -478,11 +552,129 @@ def node_save_trace(state: AgentState) -> Dict[str, Any]:
         "tool_trace": _append_trace(
             state,
             "Memory",
-            "sqlite_agent_trace_memory",
+            "Trace Memory Tool",
             "completed",
             f"Saved agent trace id={trace_id}",
         ),
     }
+
+
+
+
+def node_out_of_scope_response(state: AgentState) -> Dict[str, Any]:
+    """
+    Stop the workflow for prompts outside Airbus strategic intelligence scope.
+    This prevents forced retrieval and fake approvals for unrelated prompts.
+    """
+    goal = state.get("goal", "")
+    reason = state.get("rejection_reason", "Goal is outside AERO-CEO scope.")
+    domain_relevance = state.get("domain_relevance", 0.0)
+
+    plan = [
+        {
+            "step": 1,
+            "name": "Classify CEO goal",
+            "purpose": "Understand whether the request belongs to Airbus strategic intelligence scope.",
+            "status": "completed",
+        },
+        {
+            "step": 2,
+            "name": "Domain Scope Guard",
+            "purpose": "Reject unrelated prompts before retrieval, analysis, or LLM generation.",
+            "status": "rejected",
+        },
+    ]
+
+    validation = {
+        "status": "REJECTED_OUT_OF_SCOPE",
+        "confidence": 0.0,
+        "evidence_quality": "not_applicable",
+        "evidence_count": 0,
+        "signal_count": 0,
+        "recommendation_count": 0,
+        "source_diversity": 0,
+        "source_type_diversity": 0,
+        "issues": [reason],
+        "warnings": [],
+        "human_review_required": False,
+    }
+
+    briefing = f"""# Request Outside AERO-CEO Scope
+
+## CEO goal received
+{goal}
+
+## Decision
+This request was **not processed** because it is outside the scope of AERO-CEO.
+
+## Why it was rejected
+{reason}
+
+## Scope of this agent
+AERO-CEO is designed for Airbus strategic intelligence and CEO decision support, especially:
+
+- Airbus Defence and Space
+- FCAS and future combat systems
+- Eurofighter
+- Uncrewed systems and drones
+- Military space and secure communications
+- Aerial refuelling and military transport
+- European defence autonomy
+- Supply chain and delivery risk
+- Strategic risks, opportunities, trends, partnerships, and recommendations
+
+## Example valid questions
+- What should Airbus do next for FCAS and uncrewed systems?
+- Which European organization should Airbus collaborate with for sixth-generation fighter systems?
+- What are the biggest risks for Airbus Defence and Space?
+- What opportunities should Airbus prioritize in military space?
+
+## Governance note
+The workflow stopped before retrieval and before LLM briefing generation. This prevents AERO-CEO from producing unsupported answers for unrelated prompts.
+
+Domain relevance score: **{domain_relevance}**
+"""
+
+    return {
+        "plan": plan,
+        "evidence": [],
+        "signals": [],
+        "risks": [],
+        "opportunities": [],
+        "trends": [],
+        "recommendations": [],
+        "partners": [],
+        "decision": {
+            "strategic_direction": "Reject out-of-scope request.",
+            "expected_impact": "Prevents unsupported or misleading strategic answers.",
+            "risk_assessment": "Low risk because no unrelated recommendation is generated.",
+            "decision_options": {
+                "conservative": "Reject unrelated prompt and ask for an Airbus strategic question.",
+                "balanced": "Provide examples of valid Airbus strategic questions.",
+                "aggressive": "Do not answer unrelated prompts under AERO-CEO branding.",
+            },
+        },
+        "validation": validation,
+        "status": "REJECTED_OUT_OF_SCOPE",
+        "briefing": briefing,
+        "tool_trace": _append_trace(
+            state,
+            "Scope Check",
+            "Domain Scope Guard",
+            "REJECTED_OUT_OF_SCOPE",
+            reason,
+        ),
+    }
+
+
+def _route_after_scope_check(state: AgentState) -> str:
+    """
+    Conditional graph route after goal classification.
+    """
+    if state.get("scope_status") == "out_of_scope":
+        return "out_of_scope"
+    return "in_scope"
+
 
 
 def build_aero_ceo_graph():
@@ -492,6 +684,7 @@ def build_aero_ceo_graph():
     graph = StateGraph(AgentState)
 
     graph.add_node("classify_goal", node_classify_goal)
+    graph.add_node("out_of_scope_response", node_out_of_scope_response)
     graph.add_node("build_plan", node_build_plan)
     graph.add_node("retrieve_evidence", node_retrieve_evidence)
     graph.add_node("analyze_context", node_analyze_context)
@@ -501,7 +694,15 @@ def build_aero_ceo_graph():
     graph.add_node("save_trace", node_save_trace)
 
     graph.add_edge(START, "classify_goal")
-    graph.add_edge("classify_goal", "build_plan")
+    graph.add_conditional_edges(
+        "classify_goal",
+        _route_after_scope_check,
+        {
+            "out_of_scope": "out_of_scope_response",
+            "in_scope": "build_plan",
+        },
+    )
+    graph.add_edge("out_of_scope_response", "save_trace")
     graph.add_edge("build_plan", "retrieve_evidence")
     graph.add_edge("retrieve_evidence", "analyze_context")
     graph.add_edge("analyze_context", "decide_strategy")
