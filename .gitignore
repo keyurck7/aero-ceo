@@ -13,3 +13,4 @@ data/cache/
 models/
 logs/
 .pgdata/
+cloudflared
