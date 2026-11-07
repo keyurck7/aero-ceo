@@ -68,7 +68,9 @@ def parse_published_at(value: str | datetime | None, *, now: datetime | None = N
     return parsed
 
 
-def recency_weight(published_at: datetime | None, *, now: datetime | None = None, half_life_days: float = 180.0) -> float:
+def recency_weight(
+    published_at: datetime | None, *, now: datetime | None = None, half_life_days: float = 180.0
+) -> float:
     """Exponential decay: 1.0 today, 0.5 after one half-life. Unknown dates score 0.5."""
     if published_at is None:
         return UNKNOWN_DATE_RECENCY

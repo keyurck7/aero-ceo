@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from itertools import pairwise
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -43,7 +44,8 @@ def _normalise(matrix: np.ndarray) -> np.ndarray:
         matrix = matrix[None, :]
     norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    return matrix / norms
+    out: np.ndarray = matrix / norms
+    return out
 
 
 class HashingEmbedder:
@@ -58,7 +60,7 @@ class HashingEmbedder:
     def _vector(self, text: str) -> np.ndarray:
         vec = np.zeros(self.dim, dtype=np.float32)
         words = self._word.findall(text.lower())
-        feats = words + [f"{a}_{b}" for a, b in zip(words, words[1:], strict=False)]
+        feats = words + [f"{a}_{b}" for a, b in pairwise(words)]
         for feat in feats:
             digest = hashlib.blake2b(feat.encode("utf-8"), digest_size=8).digest()
             h = int.from_bytes(digest, "big")
@@ -71,7 +73,8 @@ class HashingEmbedder:
         return _normalise(np.stack([self._vector(t) for t in texts]))
 
     def embed_query(self, text: str) -> np.ndarray:
-        return self.embed_documents([text])[0]
+        vec: np.ndarray = self.embed_documents([text])[0]
+        return vec
 
 
 class SentenceTransformerEmbedder:
@@ -98,7 +101,8 @@ class SentenceTransformerEmbedder:
         return _normalise(out)
 
     def embed_query(self, text: str) -> np.ndarray:
-        return self.embed_documents([self.query_instruction + text])[0]
+        vec: np.ndarray = self.embed_documents([self.query_instruction + text])[0]
+        return vec
 
 
 class TEIEmbedder:
@@ -141,7 +145,8 @@ class TEIEmbedder:
         return _normalise(np.vstack(parts))
 
     def embed_query(self, text: str) -> np.ndarray:
-        return self.embed_documents([self.query_instruction + text])[0]
+        vec: np.ndarray = self.embed_documents([self.query_instruction + text])[0]
+        return vec
 
 
 def build_embedder(settings: Settings) -> Embedder:

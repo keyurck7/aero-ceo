@@ -125,7 +125,9 @@ class HybridRetriever:
         hits = hits[:top_k]
         for i, h in enumerate(hits, start=1):
             h.rank = i
-        return SearchResult(query=query, filters=filters, hits=hits, independent_publishers=independent_publishers(hits))
+        return SearchResult(
+            query=query, filters=filters, hits=hits, independent_publishers=independent_publishers(hits)
+        )
 
     def find_related(self, chunk_id: int, top_k: int = 5, other_publishers_only: bool = True) -> list[EvidenceHit]:
         """Corroboration: passages semantically closest to ``chunk_id``, from other documents/publishers."""

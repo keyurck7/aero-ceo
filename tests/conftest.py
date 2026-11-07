@@ -215,13 +215,15 @@ def v1_db(tmp_path, monkeypatch):
     docs = [
         (1, 2, "Dassault and Airbus clash over FCAS leadership", "https://news.google.com/rss/articles/1",
          "Tue, 14 Oct 2025 08:30:00 GMT", rss_text, "news"),
-        (2, 3, "SIRTAP drone flies", "https://news.google.com/rss/articles/2", "2025-10-15T10:00:00Z", fallback, "news"),
+        (2, 3, "SIRTAP drone flies", "https://news.google.com/rss/articles/2", "2025-10-15T10:00:00Z", fallback,
+         "news"),
         (3, 1, "Military space", "https://www.airbus.com/en/space", None, official, "official"),
         (4, 2, "Dassault and Airbus clash over FCAS leadership", "https://news.google.com/rss/articles/1?oc=5",
          "garbage date", rss_text, "news"),
     ]
     conn.executemany(
-        "INSERT INTO documents (id, source_id, title, url, published_at, raw_text, clean_text, source_type, content_hash)"
+        "INSERT INTO documents (id, source_id, title, url, published_at, raw_text, clean_text, source_type,"
+        " content_hash)"
         " VALUES (?,?,?,?,?,?,?,?,?)",
         [(i, s, t, u, p, txt, txt, st, f"h{i}") for i, s, t, u, p, txt, st in docs],
     )

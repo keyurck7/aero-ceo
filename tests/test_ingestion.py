@@ -102,7 +102,9 @@ def test_query_never_enters_document_text(ingestor):
 
 def test_short_and_duplicate_items(ingestor):
     src = SourceIn(name="X", source_type="news")
-    short = ingestor.ingest(RawItem(source=src, title="Hi", url="https://x/1", body="too short", content_level="full_text"))
+    short = ingestor.ingest(
+        RawItem(source=src, title="Hi", url="https://x/1", body="too short", content_level="full_text")
+    )
     assert short.outcome == "too_short"
     body = " ".join(["FCAS workshare negotiation"] * 40)
     first = ingestor.ingest(RawItem(source=src, title="T", url="https://x/2?utm_source=a", body=body))
@@ -127,8 +129,9 @@ def test_collect_official_then_ingest_and_search(ingestor, plan):
     assert "ignore_instructions" in doc.injection_flags
     assert doc.url == "https://www.airbus.com/en/newsroom/press-releases/sirtap-first-flight"  # canonical link
     assert ingestor.embed_pending() > 0 and ingestor.embed_pending() == 0  # incremental
-    res = HybridRetriever(ingestor.store, ingestor.embedder).search("SIRTAP maiden flight Rota", top_k=2,
-                                                                    filters=SearchFilters(topics=["Uncrewed Combat Aircraft"]))
+    res = HybridRetriever(ingestor.store, ingestor.embedder).search(
+        "SIRTAP maiden flight Rota", top_k=2, filters=SearchFilters(topics=["Uncrewed Combat Aircraft"])
+    )
     assert res.hits and res.hits[0].document_id == doc.id
 
 

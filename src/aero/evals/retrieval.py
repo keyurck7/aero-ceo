@@ -121,5 +121,7 @@ def qrels_from_pool(pool_rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]
     for row in pool_rows:
         graded = {c["canonical_url"]: int(c["grade"]) for c in row["candidates"] if c.get("grade") is not None}
         if graded:
-            out.append({"qid": row["qid"], "query": row["query"], "filters": row.get("filters", {}), "relevant": graded})
+            out.append(
+                {"qid": row["qid"], "query": row["query"], "filters": row.get("filters", {}), "relevant": graded}
+            )
     return out

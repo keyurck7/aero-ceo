@@ -88,27 +88,26 @@ class PostgresStore(Store):
 
     def _q(self, sql: str, params: dict[str, Any] | Sequence[Any] | None = None) -> list[dict[str, Any]]:
         with self.pool.connection() as conn:
-            return conn.execute(sql, params).fetchall()
+            rows: list[dict[str, Any]] = conn.execute(sql, params).fetchall()
+            return rows
 
     # ------------------------------------------------------------------ lifecycle
     def migrate(self) -> list[str]:
         applied: list[str] = []
-        with psycopg.connect(self.dsn, autocommit=True) as conn:
-            with conn.transaction():
-                conn.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK_KEY,))
-                conn.execute(
-                    "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, name TEXT NOT NULL,"
-                    " applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
-                )
-                done = {r[0] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
-                for mig in discover("postgres", self.embedding_dim):
-                    if mig.version in done:
-                        continue
-                    # No parameters -> psycopg uses the simple protocol, so multi-statement files work.
-                    conn.execute(mig.sql)  # type: ignore[arg-type]
-                    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (%s, %s)",
-                                 (mig.version, mig.name))
-                    applied.append(mig.version)
+        with psycopg.connect(self.dsn, autocommit=True) as conn, conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK_KEY,))
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, name TEXT NOT NULL,"
+                " applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+            done = {r[0] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
+            for mig in discover("postgres", self.embedding_dim):
+                if mig.version in done:
+                    continue
+                # No parameters -> psycopg uses the simple protocol, so multi-statement files work.
+                conn.execute(mig.sql)
+                conn.execute("INSERT INTO schema_migrations (version, name) VALUES (%s, %s)", (mig.version, mig.name))
+                applied.append(mig.version)
         return applied
 
     def close(self) -> None:
@@ -154,7 +153,8 @@ class PostgresStore(Store):
             return rows[0]["id"], "canonical_url" if rows[0]["canonical_url"] == canonical_url else "content_hash"
         bands = simhash_bands(to_signed64(simhash))
         for row in self._q(
-            "SELECT id, simhash FROM documents WHERE " + " OR ".join(f"simhash_b{i} = %s" for i in range(8)),
+            "SELECT id, simhash FROM documents WHERE "
+            + " OR ".join(f"simhash_b{i} = %s" for i in range(8)),
             bands,
         ):
             if is_near_duplicate(from_signed64(row["simhash"]), simhash):
@@ -183,10 +183,13 @@ class PostgresStore(Store):
             rows = self._q(
                 """INSERT INTO documents (source_id, title, url, canonical_url, published_at, clean_text,
                      content_level, language, topics, content_hash, simhash, simhash_b0, simhash_b1, simhash_b2,
-                     simhash_b3, simhash_b4, simhash_b5, simhash_b6, simhash_b7, ingestion_context, injection_flags, raw_object_key, pipeline_run_id)
+                     simhash_b3, simhash_b4, simhash_b5, simhash_b6, simhash_b7, ingestion_context, injection_flags,
+                     raw_object_key, pipeline_run_id)
                    VALUES (%(source_id)s, %(title)s, %(url)s, %(canonical_url)s, %(published_at)s, %(clean_text)s,
                      %(content_level)s, %(language)s, %(topics)s, %(content_hash)s, %(simhash)s, %(simhash_b0)s,
-                     %(simhash_b1)s, %(simhash_b2)s, %(simhash_b3)s, %(simhash_b4)s, %(simhash_b5)s, %(simhash_b6)s, %(simhash_b7)s, %(ingestion_context)s, %(injection_flags)s,
+                     %(simhash_b1)s, %(simhash_b2)s, %(simhash_b3)s, %(simhash_b4)s,
+                     %(simhash_b5)s, %(simhash_b6)s, %(simhash_b7)s,
+                     %(ingestion_context)s, %(injection_flags)s,
                      %(raw_object_key)s, %(pipeline_run_id)s)
                    RETURNING *""",
                 params,

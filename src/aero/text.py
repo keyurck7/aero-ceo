@@ -258,7 +258,9 @@ _INJECTION_PATTERNS: dict[str, re.Pattern[str]] = {
         r"\b(instructions?|prompts?|rules|directions)\b",
         re.IGNORECASE | re.DOTALL,
     ),
-    "role_override": re.compile(r"\byou are now\b|\bnew instructions?\s*:|\bact as (an?|the) (ai|assistant|system)\b", re.I),
+    "role_override": re.compile(
+        r"\byou are now\b|\bnew instructions?\s*:|\bact as (an?|the) (ai|assistant|system)\b", re.I
+    ),
     "prompt_markup": re.compile(r"<\|?(im_start|im_end|system|assistant)\|?>|</?(system|assistant)>|\[/?INST\]", re.I),
     "system_prompt_probe": re.compile(r"\b(reveal|print|show|repeat)\b.{0,30}\bsystem prompt\b", re.I),
     "exfiltration": re.compile(r"\b(send|post|forward|email)\b.{0,40}\b(api key|password|credentials|token)s?\b", re.I),

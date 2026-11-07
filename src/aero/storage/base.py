@@ -26,7 +26,7 @@ from aero.text import from_signed64, hamming64, to_signed64
 # (mean ~4); unrelated texts are >= ~19 bits apart. 7 catches typical syndication safely.
 NEAR_DUPLICATE_MAX_HAMMING = 7
 
-_STOPWORDS = frozenset(
+_STOPWORDS = frozenset(  # noqa: SIM905 - a word list is easier to maintain as one string
     "a an and are as at be but by can could did do does for from had has have how i if in into is it its "
     "may me might more most my no not of on or our should so than that the their them then there these they "
     "this those to was we were what when where which while who why will with would you your about against "

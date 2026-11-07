@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from datetime import datetime
+
 from aero.dates import from_db, to_db, utcnow
 from aero.domain import ChunkIn, Document, DocumentIn, EvidenceChunk, SearchFilters, Source, SourceIn, StoreStats
 from aero.storage.base import (
@@ -59,6 +61,13 @@ class SQLiteStore(Store):
         self._matrix_cache: tuple[int, str, np.ndarray, np.ndarray] | None = None
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _ts(value: str) -> datetime:
+        """Non-null timestamp column."""
+        parsed = from_db(value)
+        assert parsed is not None
+        return parsed
+
     def _q(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
@@ -104,7 +113,7 @@ class SQLiteStore(Store):
         return Source(
             id=row["id"], name=row["name"], source_type=row["source_type"], base_url=row["base_url"],
             credibility_prior=row["credibility_prior"], publisher_group=row["publisher_group"],
-            licence=row["licence"], created_at=from_db(row["created_at"]),
+            licence=row["licence"], created_at=SQLiteStore._ts(row["created_at"]),
         )
 
     def upsert_source(self, source: SourceIn) -> Source:
@@ -155,7 +164,7 @@ class SQLiteStore(Store):
         return Document(
             id=row["id"], source_id=row["source_id"], title=row["title"], url=row["url"],
             canonical_url=row["canonical_url"], published_at=from_db(row["published_at"]),
-            collected_at=from_db(row["collected_at"]), clean_text=row["clean_text"],
+            collected_at=self._ts(row["collected_at"]), clean_text=row["clean_text"],
             content_level=row["content_level"], language=row["language"], topics=topics,
             content_hash=row["content_hash"], simhash=from_signed64(row["simhash"]),
             ingestion_context=json.loads(row["ingestion_context"]),
@@ -179,10 +188,13 @@ class SQLiteStore(Store):
                 new_id = cur.execute(
                     """INSERT INTO documents (source_id, title, url, canonical_url, published_at, clean_text,
                          content_level, language, content_hash, simhash, simhash_b0, simhash_b1, simhash_b2,
-                         simhash_b3, simhash_b4, simhash_b5, simhash_b6, simhash_b7, ingestion_context, injection_flags, raw_object_key, pipeline_run_id)
+                         simhash_b3, simhash_b4, simhash_b5, simhash_b6, simhash_b7, ingestion_context, injection_flags,
+                         raw_object_key, pipeline_run_id)
                        VALUES (:source_id, :title, :url, :canonical_url, :published_at, :clean_text,
                          :content_level, :language, :content_hash, :simhash, :simhash_b0, :simhash_b1, :simhash_b2,
-                         :simhash_b3, :simhash_b4, :simhash_b5, :simhash_b6, :simhash_b7, :ingestion_context, :injection_flags, :raw_object_key, :pipeline_run_id)""",
+                         :simhash_b3, :simhash_b4, :simhash_b5, :simhash_b6, :simhash_b7,
+                         :ingestion_context, :injection_flags,
+                         :raw_object_key, :pipeline_run_id)""",
                     params,
                 ).lastrowid
             except sqlite3.IntegrityError as exc:  # raced with another writer
@@ -331,7 +343,7 @@ class SQLiteStore(Store):
             url=row["url"], canonical_url=row["canonical_url"], publisher=row["publisher"],
             publisher_group=row["publisher_group"], source_type=row["source_type"], licence=row["licence"],
             credibility_prior=row["credibility_prior"], published_at=from_db(row["published_at"]),
-            collected_at=from_db(row["collected_at"]), topics=topics.get(row["document_id"], []),
+            collected_at=self._ts(row["collected_at"]), topics=topics.get(row["document_id"], []),
             content_level=row["content_level"], injection_flags=json.loads(row["injection_flags"]),
         )
 
@@ -382,8 +394,12 @@ class SQLiteStore(Store):
             )
 
     def stats(self) -> StoreStats:
-        one = lambda sql: self._q(sql)[0][0]  # noqa: E731
-        models = [r[0] for r in self._q("SELECT DISTINCT embedding_model FROM chunks WHERE embedding_model IS NOT NULL")]
+        def one(sql: str) -> Any:
+            return self._q(sql)[0][0]
+
+        models = [
+            r[0] for r in self._q("SELECT DISTINCT embedding_model FROM chunks WHERE embedding_model IS NOT NULL")
+        ]
         return StoreStats(
             sources=one("SELECT COUNT(*) FROM sources"),
             documents=one("SELECT COUNT(*) FROM documents"),

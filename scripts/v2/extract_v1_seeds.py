@@ -178,7 +178,8 @@ def main() -> None:
 
     EVALS.mkdir(parents=True, exist_ok=True)
     seed_sh = (ROOT / "scripts/seed_ceo_questions.sh").read_text(encoding="utf-8")
-    questions = literal("app/dashboard/demo_control.py", "DEMO_QUESTIONS") + re.findall(r'ask_ceo\.sh "([^"]+)"', seed_sh)
+    questions = literal("app/dashboard/demo_control.py", "DEMO_QUESTIONS")
+    questions += re.findall(r'ask_ceo\.sh "([^"]+)"', seed_sh)
     unique_q = list(dict.fromkeys(questions))
     with (EVALS / "golden_questions_seed.jsonl").open("w", encoding="utf-8") as fh:
         for i, q in enumerate(unique_q, 1):
