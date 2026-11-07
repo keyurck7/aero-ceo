@@ -25,7 +25,7 @@ aero ingest v1 data/aero_ceo.sqlite                  # import the v1 corpus (rea
 aero ingest official --limit 40                      # and/or collect fresh evidence
 aero ingest news --limit 200
 aero search "Which partner could help Airbus in Spain for SIRTAP?"
-pytest                                               # 90 tests, no network, no GPU
+pytest                                               # 91 tests, no network, no GPU
 ```
 
 ## Use the evidence server from an MCP host

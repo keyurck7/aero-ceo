@@ -47,9 +47,10 @@ P3 (licence review: **owner decision**), P4 (shared model serving: TEI wired, vL
   validation-only psql-backed driver, with `real[]` plus a SQL `<#>` operator standing in for pgvector.
   That run caught a real bug: `credibility_prior REAL` made `0.9 >= 0.9` false. The column is now `DOUBLE PRECISION`.
 - ✅ Wheel builds and contains both migration sets and the `aero` entry point.
-- ⏳ Not yet executed: real psycopg + pgvector type adaptation and the HNSW index (CI job `test-postgres`),
-  `docker-compose.yml`, the Dockerfile image build, ruff and mypy. Expect a short fix-up pass on the
-  first CI run.
+- ✅ CI (GitHub Actions) green: SQLite suite on Python 3.11/3.12/3.13, **33/33 tests on real Postgres +
+  pgvector 0.8**, `ruff` clean, `mypy --strict` clean (both now blocking), Docker image builds. The first runs
+  caught an undeclared `psycopg-pool` and pgvector returning `Vector` objects; both are fixed.
+- ⏳ Not yet executed: `docker-compose.yml` as a whole stack (TEI images, healthchecks).
 
 ## Real corpus (v1 `aero_ceo.sqlite`, imported 2026-11-07)
 
