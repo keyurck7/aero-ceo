@@ -48,10 +48,14 @@ class SourcePlan:
     news_queries: list[str]
     news_feed_template: str
     full_text_policy: FullTextPolicy = "research_mode"
+    publisher_overrides: dict[str, float] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def prior_for(self, publisher: str) -> float:
         lower = publisher.lower()
+        exact = {k.lower(): v for k, v in self.publisher_overrides.items()}
+        if lower in exact:
+            return exact[lower]
         best = [v for k, v in self.publisher_priors.items() if k.lower() in lower]
         return max(best) if best else self.default_news_prior
 
@@ -81,6 +85,7 @@ def load_source_plan(path: str | Path) -> SourcePlan:
         news_queries=list(col.get("news_queries", [])),
         news_feed_template=col.get("news_feed_template", ""),
         full_text_policy=data.get("full_text_policy", "research_mode"),
+        publisher_overrides={str(k): float(v) for k, v in data.get("publisher_overrides", {}).items()},
     )
 
 

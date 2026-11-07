@@ -114,6 +114,12 @@ def main() -> None:
         ],
         # Feed items name their publisher; these priors are matched case-insensitively.
         "publisher_priors": {k: v for k, v in trusted.items()},
+        # Exact publisher names (case-insensitive); take precedence over publisher_priors. Analyst-maintained.
+        # Low values: content-farm / SEO-spam items found in the v1 corpus (2026-11-07 review).
+        "publisher_overrides": {
+            "Mshale": 0.05, "Fathom Journal": 0.05, "facebook.com": 0.2, "Moomoo": 0.3, "TradingView": 0.3,
+            "Financial Times": 0.9, "DW.com": 0.85, "Euronews.com": 0.8, "SpaceNews": 0.84, "TWZ": 0.8,
+        },
         "default_news_prior": 0.65,
         "collection": {
             "official_seed_urls": literal("app/ingestion/collectors/airbus_live_collector.py", "OFFICIAL_SEED_URLS"),

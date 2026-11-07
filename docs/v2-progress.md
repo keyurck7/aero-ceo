@@ -51,11 +51,31 @@ P3 (licence review: **owner decision**), P4 (shared model serving: TEI wired, vL
   `docker-compose.yml`, the Dockerfile image build, ruff and mypy. Expect a short fix-up pass on the
   first CI run.
 
+## Real corpus (v1 `aero_ceo.sqlite`, imported 2026-11-07)
+
+| Finding | Number | Consequence |
+|---|---|---|
+| Documents carrying v1's query-in-text template (B1) | **180 / 190 (95%)** | stripped on import; query kept as provenance |
+| News items that are headline-only (Google News RSS has no article text) | 180 / 181 | median v2 document = **10 words**; v1 answers rested on headlines plus template text |
+| Duplicates v1 stored twice (its template made the content hashes differ) | 3 | collapsed |
+| Official pages titled "Airbus official page" | 9 / 9 | titled from URL |
+| SEO-spam publishers at the default 0.65 credibility (Mshale, Fathom Journal…) | 6 docs | `publisher_overrides` in `seeds/sources.yaml` (0.05) |
+| Undated documents | 9 (all official pages) | recency = neutral 0.5 |
+| v1 `agent_traces` / `human_approval_reviews` | 25 / 4 | **local agent code is not in the repo**; one review shows `confidence 0.92 "high"` while the guardrail found claim support < 0.65 plus contradictions (finding B7) |
+
+**Retrieval baseline** on 15 queries × 186 docs (draft qrels, `evals/datasets/`), hashing embedder + BM25 (sandbox floor):
+nDCG@10 **0.42** · capped Recall@10 **0.49** · MRR **0.77**. Best: FCAS/Dassault (0.90). Worst: abstract strategy
+questions such as "drone demand grows faster than fighter procurement" (0.00): the gap BGE is meant to close.
+BGE ± reranker numbers come from the Data Lab session (`docs/runbooks/datalab.md`).
+
+## Owner decisions (2026-11-07)
+Academic use → `research_mode` (ADR 0004) · Qwen only, local → Qwen3.6-27B on vLLM (ADR 0006) · Data Lab nodes per phase (runbook).
+
 ## Next session
 
-1. Run CI and fix whatever the Postgres job and ruff report.
-2. Import the real v1 corpus (`aero ingest v1 data/aero_ceo.sqlite`), label about 100 retrieval queries
-   (`aero eval pool` → grade → `aero eval retrieval`), and record the baseline.
+1. Data Lab session (A6000, about 30 min): BGE ± reranker baseline on the draft qrels; review the qrels.
+2. Fix the corpus itself: add direct publisher RSS feeds (Breaking Defense, Defense News, Janes, Aviation Week,
+   FlightGlobal) so news items carry article text, not just headlines.
 3. `signals-mcp` (migration 0002: signals with chunk spans; rule:v1 extractor from
    `seeds/signal_rules_v1.yaml`, LLM extractor behind an interface), then `strategy-mcp` and
    `partners-mcp` from the seeds.

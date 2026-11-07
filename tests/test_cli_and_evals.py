@@ -17,6 +17,8 @@ def test_score_ranking_metrics():
     perfect = score_ranking(["a", "b", "x"], rel, k=3)[3]
     assert perfect == pytest.approx(1.0) and ndcg < perfect
     assert score_ranking([], rel, k=3) == (0.0, 0.0, 0.0, 0.0)
+    many = {f"d{i}": 1 for i in range(30)}
+    assert score_ranking([f"d{i}" for i in range(10)], many, k=10)[0] == 1.0  # capped recall
 
 
 def test_qrels_from_pool_keeps_graded_only():

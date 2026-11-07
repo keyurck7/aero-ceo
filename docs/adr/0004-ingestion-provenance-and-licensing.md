@@ -1,6 +1,6 @@
 # ADR 0004: Evidence text is publisher text only; licence-aware full-text policy
 
-**Status:** accepted · 2026-11-07, **open item:** licence review (owner: Keyur)
+**Status:** accepted · 2026-11-07. Owner decision 2026-11-07: **academic use**, so `research_mode` stays.
 
 ## Context
 v1 wrote the search query into stored evidence ("…mentions Airbus in the context of {query}…" and
@@ -20,5 +20,6 @@ by construction (findings B1, P10). v1 also scraped full articles regardless of 
 - The v1 importer strips both v1 templates and moves the query into provenance.
 
 ## Consequences
+- Current use is academic (owner decision), so `full_text_policy: research_mode` is correct today.
 Before any commercial or shared deployment, every active source needs a reviewed licence and
 `full_text_policy: respect_licence`.

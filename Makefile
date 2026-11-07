@@ -26,7 +26,7 @@ serve-stdio:        ## for Claude Desktop / MCP Inspector
 	aero serve evidence --stdio
 
 eval-pool:          ## write candidates to label
-	aero eval pool --queries evals/datasets/retrieval_queries_seed.jsonl --out evals/datasets/retrieval_pool.jsonl
+	aero eval pool --queries evals/datasets/retrieval_queries.jsonl --out evals/datasets/retrieval_pool.jsonl
 
 eval:               ## score retrieval; fails below the gate
 	aero eval labels && aero eval retrieval --min-recall 0.80 --out evals/reports/retrieval_latest.json

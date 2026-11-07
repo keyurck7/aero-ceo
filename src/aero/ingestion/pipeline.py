@@ -75,7 +75,9 @@ class Ingestor:
         if not text:
             self.counts["empty"] += 1
             return IngestResult("empty")
-        if len(text.split()) < MIN_WORDS[item.content_level]:
+        if len(text.split()) < MIN_WORDS[item.content_level] and not (
+            item.content_level == "headline_summary" and len(text.split()) >= 4
+        ):
             self.counts["too_short"] += 1
             return IngestResult("too_short", detail=f"{len(text.split())} words")
         doc_in = DocumentIn(

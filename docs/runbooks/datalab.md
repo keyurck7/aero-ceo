@@ -1,0 +1,91 @@
+# Runbook: AERO-CEO v2 on SRH Data Lab
+
+Data Lab (`compute.data-lab.site`) runs JupyterHub servers that are **billed per hour while running**.
+Credits are the scarce resource, so: pick the cheapest node that fits the phase, and stop the server
+as soon as a session ends.
+
+## Which node, which image
+
+Image: **PyTorch (LLM Focus)** (PyTorch, Hugging Face, vLLM, MCP and LangChain preinstalled).
+
+| Work | Node | Cost | Why |
+|---|---|---|---|
+| Phases 1–2: import, BGE embeddings, reranker, retrieval evals, MCP servers | **London** or **Rome** (A6000 48 GB) | 10 credits/h | BGE-large plus a reranker need about 3 GB of VRAM; a 186-document corpus embeds in seconds |
+| Phase 3 development: agent with **Qwen3.6-27B** | **Heidelberg** (Pro 6000 96 GB) | 12 credits/h | 27B BF16 weights are about 54 GB, leaving about 30 GB for KV cache (32K context) plus BGE |
+| Phase 3 eval runs and demos (long context, throughput) | **Madrid** (H200 141 GB) | 15 credits/h | About 75 GB of headroom for KV cache; fastest memory |
+| — | Frankfurt (2× A6000) | 10 credits/h | Avoid: the 2026-11-07 snapshot showed its GPU memory at about 95% used by other tenants |
+
+At 170 credits, that is about 17 h on an A6000, 14 h on the Pro 6000 or 11 h on the H200.
+
+## One-time setup (any node)
+
+```bash
+cd ~ && git clone https://github.com/keyurck7/aero-ceo.git && cd aero-ceo && git checkout v2
+python -m venv --system-site-packages .venv && source .venv/bin/activate   # reuse the image's torch/vLLM
+pip install -e ".[mcp,extract,dev]" sentence-transformers
+echo 'export HF_HOME=~/hf-cache' >> ~/.bashrc && export HF_HOME=~/hf-cache  # keep model downloads across spawns
+df -h ~                                                                   # check the home quota before pulling a 54 GB model
+pytest -q                                                                 # expect: all pass, Postgres tests skipped
+```
+
+`.env` for this box (SQLite plus in-process models; Docker is normally unavailable inside JupyterHub):
+
+```bash
+AERO_ENV=local
+AERO_DATABASE_URL=sqlite:///data/aero_v2.sqlite
+AERO_EMBEDDING_BACKEND=sentence-transformers
+AERO_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+AERO_EMBEDDING_DIM=1024
+AERO_RERANKER_BACKEND=cross-encoder
+AERO_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+```
+
+## Phase 1 session: import the v1 corpus and measure retrieval (≈ 30 min on an A6000)
+
+```bash
+mkdir -p data && cp /path/to/aero_ceo.sqlite data/aero_ceo.sqlite
+aero db migrate && aero seed sources
+aero ingest v1 data/aero_ceo.sqlite          # 186 inserted, 180 templates stripped, 3 duplicates collapsed
+aero search "How should Airbus respond if drone demand grows faster than fighter procurement?"
+
+# Three-way ablation on the draft qrels (15 queries x 186 documents, labelled exhaustively)
+AERO_RERANKER_BACKEND=none aero eval retrieval --qrels evals/datasets/retrieval_qrels.jsonl \
+  --out evals/reports/retrieval_bge_norerank.json
+aero eval retrieval --qrels evals/datasets/retrieval_qrels.jsonl --out evals/reports/retrieval_bge_rerank.json
+```
+
+Commit the two JSON summaries or paste them into `docs/v2-progress.md`. The hashing-embedder floor
+measured in the sandbox is nDCG@10 0.42 / capped Recall@10 0.49 / MRR 0.77.
+
+## Phase 3 session: serve Qwen with vLLM
+
+Check that the image's vLLM supports Qwen3.6 (0.19 or newer is the documented minimum):
+
+```bash
+python -c "import vllm; print(vllm.__version__)"
+```
+
+Start the server in a terminal, or in the background with `nohup … &`:
+
+```bash
+vllm serve Qwen/Qwen3.6-27B \
+  --served-model-name qwen3.6-27b \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.80 \
+  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  --reasoning-parser qwen3 \
+  --port 8000
+```
+
+- `--gpu-memory-utilization 0.80` leaves room for BGE and the reranker on the same GPU. On the H200,
+  raise `--max-model-len` (e.g. 65536).
+- Fallback if VRAM is tight: `Qwen/Qwen3.6-27B-FP8` (about half the weight memory).
+- Check the model card for the current parser names before the first run; they change between vLLM
+  releases.
+
+Smoke test: `curl localhost:8000/v1/models`. The orchestrator (phase 3) reads `AERO_LLM_BASE_URL=http://localhost:8000/v1`.
+
+## Credit discipline
+- Stop the server from the Hub control panel when you finish. An idle kernel still bills.
+- Keep `HF_HOME` and `data/` in your home directory, so a new spawn does not re-download or re-import.
+- Prefer one long, planned session over many short ones (each spawn pays the model-load time).

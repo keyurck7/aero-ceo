@@ -81,6 +81,17 @@ publisher_priors:
   defence blog: 0.7
   the defense post: 0.72
   aerotime: 0.7
+publisher_overrides:
+  Mshale: 0.05
+  Fathom Journal: 0.05
+  facebook.com: 0.2
+  Moomoo: 0.3
+  TradingView: 0.3
+  Financial Times: 0.9
+  DW.com: 0.85
+  Euronews.com: 0.8
+  SpaceNews: 0.84
+  TWZ: 0.8
 default_news_prior: 0.65
 collection:
   official_seed_urls:

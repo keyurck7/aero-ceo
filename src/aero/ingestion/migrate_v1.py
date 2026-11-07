@@ -41,6 +41,37 @@ _TEMPLATE_A = re.compile(
 _TEMPLATE_B = re.compile(r"^(?P<head>.*)\.\s*Search query:\s*(?P<query>[^.]*?)\s*$", re.DOTALL)
 
 _V1_TYPES = {"official", "news", "policy", "competitor", "community"}
+_PLACEHOLDER_TITLES = {"airbus official page", "airbus official web", ""}
+_ACRONYMS = {"fcas", "uas", "uav", "isr", "mrtt", "eu", "nato", "ew"}
+
+
+def title_from_url(url: str) -> str:
+    """v1 titled every crawled page "Airbus official page"; derive a real title from the URL path."""
+    from urllib.parse import urlsplit
+
+    segment = [p for p in urlsplit(url).path.split("/") if p and p not in {"en", "de", "fr", "es"}]
+    words = (segment[-1] if segment else "home").replace("-", " ").split()
+    pretty = " ".join(w.upper() if w in _ACRONYMS else w for w in words)
+    return f"Airbus: {pretty[:1].upper()}{pretty[1:]}"
+
+
+def clean_v1_news(title: str, summary: str, publisher: str) -> tuple[str, str]:
+    """Google News items: title "Headline - Publisher", summary "Headline Publisher".
+
+    Returns ``(headline, extra)`` where ``extra`` is whatever the summary adds beyond the
+    headline (usually nothing: Google News RSS carries no article text).
+    """
+    headline = title.strip()
+    if publisher and headline.endswith(f" - {publisher}"):
+        headline = headline[: -len(publisher) - 3].rstrip()
+    extra = summary.strip()
+    for prefix in (title.strip(), headline):
+        if prefix and extra.startswith(prefix):
+            extra = extra[len(prefix):].strip()
+            break
+    if publisher and extra.endswith(publisher):
+        extra = extra[: -len(publisher)].strip()
+    return headline, extra.strip(" -–|·.")
 
 
 @dataclass
@@ -92,13 +123,20 @@ def read_v1(path: str | Path) -> list[V1Row]:
 def migrate_v1(path: str | Path, ingestor: Ingestor, plan: SourcePlan, run_id: int | None = None) -> Counter[str]:
     stats: Counter[str] = Counter()
     for row in read_v1(path):
-        body, level, context = parse_v1_text(row.title or "", row.text or "")
+        title = row.title or ""
+        body, level, context = parse_v1_text(title, row.text or "")
         if context:
             stats[f"stripped_{context['v1_template']}"] += 1
+            title, body = clean_v1_news(title, body, row.source_name)
+            if not body:
+                stats["headline_only"] += 1
+        if title.strip().lower() in _PLACEHOLDER_TITLES and row.url:
+            title = title_from_url(row.url)
+            stats["titled_from_url"] += 1
         if level == "full_text" and row.source_type == "official" and not row.published_at:
             level = "page"
         # v1 accepted anything >= 250 characters as an "article"; short texts are snippets, not full text.
-        if level != "headline_summary" and len(f"{row.title} {body}".split()) < MIN_WORDS[level]:
+        if level != "headline_summary" and len(f"{title} {body}".split()) < MIN_WORDS[level]:
             level = "headline_summary"
             stats["downgraded_short_text"] += 1
         stype = row.source_type if row.source_type in _V1_TYPES else "unknown"
@@ -108,11 +146,11 @@ def migrate_v1(path: str | Path, ingestor: Ingestor, plan: SourcePlan, run_id: i
         elif stype == "news":
             source = plan.news_source(row.source_name)
         else:
-            source = SourceIn(name=row.source_name, source_type=stype,  # type: ignore[arg-type]
+            source = SourceIn(name=row.source_name, source_type=stype,
                               credibility_prior=min(max(float(row.trust_score), 0.0), 1.0),
                               publisher_group=re.sub(r"[^a-z0-9]+", "_", row.source_name.lower()).strip("_"))
         result = ingestor.ingest(
-            RawItem(source=source, title=row.title or "", url=row.url or f"v1://document/{row.id}", body=body,
+            RawItem(source=source, title=title, url=row.url or f"v1://document/{row.id}", body=body,
                     content_level=level, published_at=row.published_at,  # type: ignore[arg-type]
                     ingestion_context={"collector": "v1_import", "v1_document_id": row.id, **context}),
             run_id=run_id,

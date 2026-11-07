@@ -150,6 +150,7 @@ def test_collect_news_respects_licence_policy(plan):
     assert research[0].ingestion_context["unresolved_aggregator_link"] is True
     assert research[1].url == "https://www.defensenews.com/sirtap"  # resolved past the aggregator
     assert research[1].source.name == "Defense News" and research[1].source.credibility_prior > 0.8
+    assert plan.prior_for("Mshale") == 0.05 and plan.prior_for("MSHALE") == 0.05  # spam override wins
     assert all(i.ingestion_context["query"] == q for i in research)
 
     plan.full_text_policy = "respect_licence"
@@ -175,6 +176,17 @@ def test_parse_v1_text_strips_both_templates():
     assert parse_v1_text("T", "A normal article.")[1] == "full_text"
 
 
+def test_clean_v1_google_news_items():
+    from aero.ingestion.migrate_v1 import clean_v1_news, title_from_url
+
+    assert clean_v1_news("Airbus wins SATCOM deal - Reuters", "Airbus wins SATCOM deal - Reuters Reuters", "Reuters") \
+        == ("Airbus wins SATCOM deal", "")
+    assert clean_v1_news("Head - Pub", "Head A real summary sentence. Pub", "Pub") \
+        == ("Head", "A real summary sentence")
+    assert title_from_url("https://www.airbus.com/en/products-services/defence/future-combat-air-system-fcas") \
+        == "Airbus: Future combat air system FCAS"
+
+
 def test_migrate_v1_end_to_end(v1_db, ingestor, plan):
     before = Path(v1_db).read_bytes()
     stats = migrate_v1(v1_db, ingestor, plan)
@@ -191,3 +203,5 @@ def test_migrate_v1_end_to_end(v1_db, ingestor, plan):
     assert fcas.content_level == "headline_summary"
     space = next(store.get_document(i) for i in store.list_document_ids() if "space" in store.get_document(i).url)
     assert space.content_level == "page" and "Military Space" in space.topics
+    assert space.title == "Airbus: Space" and stats["titled_from_url"] == 1
+    assert not any(store.get_document(i).title.endswith(" - Reuters") for i in store.list_document_ids())

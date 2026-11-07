@@ -6,7 +6,7 @@ nothing (finding P10). v2 measures ranking quality against human labels:
 
 * Labels are per **document** (keyed by canonical URL): they survive re-chunking
   and re-embedding, unlike chunk IDs.
-* Metrics: Recall@k, Precision@k, MRR, nDCG@k with graded gains (0/1/2).
+* Metrics: capped Recall@k, Precision@k, MRR, nDCG@k with graded gains (0/1/2).
 * Labelling workflow (TREC-style pooling): ``aero eval pool`` writes the top-k
   candidates per query to a JSONL file. You set ``grade`` (0 = irrelevant,
   1 = partially, 2 = directly relevant) and run ``aero eval retrieval``.
@@ -72,7 +72,9 @@ def score_ranking(ranked: list[str], relevant: dict[str, int], k: int) -> tuple[
     rel = {d for d, g in relevant.items() if g > 0}
     top = ranked[:k]
     hits = [d for d in top if d in rel]
-    recall = len(hits) / len(rel) if rel else 0.0
+    # Capped recall (BEIR "recall_cap"): hits / min(|relevant|, k), so a query with 30 relevant
+    # documents can still reach 1.0 at k=10 and the CI gate stays meaningful.
+    recall = len(hits) / min(len(rel), k) if rel else 0.0
     precision = len(hits) / k
     mrr = next((1.0 / (i + 1) for i, d in enumerate(top) if d in rel), 0.0)
     dcg = sum((2 ** relevant.get(d, 0) - 1) / math.log2(i + 2) for i, d in enumerate(top))

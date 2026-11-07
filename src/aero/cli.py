@@ -200,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("eval", help="retrieval evaluation")
     ev_sub = ev.add_subparsers(dest="action", required=True)
     pool = ev_sub.add_parser("pool", help="write top-k candidates per query for labelling")
-    pool.add_argument("--queries", default="evals/datasets/retrieval_queries_seed.jsonl")
+    pool.add_argument("--queries", default="evals/datasets/retrieval_queries.jsonl")
     pool.add_argument("--out", default="evals/datasets/retrieval_pool.jsonl")
     pool.add_argument("--k", type=int, default=20)
     labels = ev_sub.add_parser("labels", help="convert a graded pool into qrels")
