@@ -12,12 +12,11 @@ import json
 import sqlite3
 import threading
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-from datetime import datetime
 
 from aero.dates import from_db, to_db, utcnow
 from aero.domain import ChunkIn, Document, DocumentIn, EvidenceChunk, SearchFilters, Source, SourceIn, StoreStats

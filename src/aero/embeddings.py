@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from itertools import pairwise
 from collections.abc import Sequence
+from itertools import pairwise
 from typing import Protocol
 
 import numpy as np

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -88,8 +88,7 @@ class PostgresStore(Store):
 
     def _q(self, sql: str, params: dict[str, Any] | Sequence[Any] | None = None) -> list[dict[str, Any]]:
         with self.pool.connection() as conn:
-            rows: list[dict[str, Any]] = conn.execute(sql, params).fetchall()
-            return rows
+            return cast(list[dict[str, Any]], conn.execute(sql, params).fetchall())
 
     # ------------------------------------------------------------------ lifecycle
     def migrate(self) -> list[str]:
@@ -216,7 +215,7 @@ class PostgresStore(Store):
                     (document_id, ch.chunk_index, ch.text, ch.char_start, ch.char_end, ch.word_count),
                 ).fetchone()
                 assert row is not None
-                ids.append(row["id"])
+                ids.append(cast(dict[str, Any], row)["id"])
         return ids
 
     # ------------------------------------------------------------------ embeddings
@@ -244,7 +243,10 @@ class PostgresStore(Store):
                        (chunk_id,))
         if not rows:
             return None
-        return np.asarray(rows[0]["embedding"], dtype=np.float32), rows[0]["embedding_model"]
+        value = rows[0]["embedding"]
+        # pgvector >= 0.4 returns a pgvector.Vector object, older versions a numpy array.
+        arr = value.to_numpy() if hasattr(value, "to_numpy") else value
+        return np.asarray(arr, dtype=np.float32), rows[0]["embedding_model"]
 
     # ------------------------------------------------------------------ search
     @staticmethod
