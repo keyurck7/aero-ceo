@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rss [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<rss version="2.0"><channel><title>"Airbus FCAS" - Google News</title>
+<item>
+  <title>Dassault and Airbus clash over FCAS leadership - Reuters</title>
+  <link>https://news.google.com/rss/articles/CBMiAAA?oc=5</link>
+  <pubDate>Tue, 14 Oct 2025 08:30:00 GMT</pubDate>
+  <description>&lt;a href="https://news.google.com/rss/articles/CBMiAAA"&gt;Dassault and Airbus clash over FCAS leadership&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;Reuters&lt;/font&gt;</description>
+  <source url="https://www.reuters.com">Reuters</source>
+</item>
+<item>
+  <title>SIRTAP drone flies for the first time &amp;xxe; - Defense News</title>
+  <link>https://news.google.com/rss/articles/CBMiBBB?oc=5</link>
+  <pubDate>Wed, 15 Oct 2025 10:00:00 GMT</pubDate>
+  <description>Airbus SIRTAP tactical drone completed its first flight in Spain with Indra and GMV.</description>
+  <source url="https://www.defensenews.com">Defense News</source>
+</item>
+<item><title></title><link>https://x</link></item>
+</channel></rss>

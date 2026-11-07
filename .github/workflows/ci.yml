@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ".[mcp,postgres,dev]"
+      - name: ruff (advisory until the first clean pass; never run in the authoring sandbox)
+        run: ruff check src tests scripts/v2
+        continue-on-error: true
+      - name: mypy (advisory until the first clean pass)
+        run: mypy
+        continue-on-error: true
+
+  test-sqlite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install ".[mcp,dev]"
+      - run: pytest --cov --cov-report=term-missing -m "not network"
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: aero
+          POSTGRES_PASSWORD: aero_ci
+          POSTGRES_DB: aero_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aero -d aero_test" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      AERO_TEST_DATABASE_URL: postgresql://aero:aero_ci@localhost:5432/aero_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ".[mcp,postgres,dev]"
+      - name: Store contract, retrieval and MCP tests against Postgres + pgvector
+        run: pytest -m postgres -v
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [test-sqlite]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg EXTRAS=postgres,mcp -t aero-ceo/evidence-mcp:ci .

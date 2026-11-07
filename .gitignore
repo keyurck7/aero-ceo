@@ -13,3 +13,13 @@ data/cache/
 models/
 logs/
 .pgdata/
+
+# v2
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+evals/reports/*.json
+evals/datasets/retrieval_pool.jsonl
