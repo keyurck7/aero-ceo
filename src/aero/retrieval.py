@@ -6,8 +6,9 @@ Pipeline per query:
    use the *same* filters inside the database query (finding B6).
 2. Reciprocal Rank Fusion: score-scale-free, robust, no tuning needed.
 3. Optional cross-encoder rerank of the fused candidates.
-4. Final score = relevance blended with source credibility and recency. Every
-   factor is returned in ``ScoreBreakdown``, so nothing is hidden.
+4. Final score = relevance (optionally blended with credibility/recency; off by
+   default after the 2026-11-08 ablation). Publishers below a credibility floor
+   are filtered out. Every factor is returned in ``ScoreBreakdown``.
 
 Also reports ``independent_publishers``: syndicated copies count once. The
 orchestrator's coverage check ("≥ 2 independent publishers") needs this number.
@@ -33,8 +34,9 @@ class RetrievalConfig:
     mode: str = "hybrid"
     candidate_k: int = 50
     rrf_k: int = 60
-    credibility_weight: float = 0.10
-    recency_weight: float = 0.05
+    credibility_weight: float = 0.0
+    recency_weight: float = 0.0
+    min_credibility: float = 0.15
     recency_half_life_days: float = 180.0
 
     @classmethod
@@ -45,6 +47,7 @@ class RetrievalConfig:
             rrf_k=s.retrieval_rrf_k,
             credibility_weight=s.retrieval_credibility_weight,
             recency_weight=s.retrieval_recency_weight,
+            min_credibility=s.retrieval_min_credibility,
             recency_half_life_days=s.recency_half_life_days,
         )
 
@@ -79,8 +82,8 @@ class HybridRetriever:
         query = query.strip()
         if not query:
             raise ValueError("query must not be empty")
-        filters = filters or SearchFilters()
         cfg = self.config
+        filters = self._with_floor(filters or SearchFilters())
         n = max(cfg.candidate_k, top_k)
 
         dense: list[tuple[int, float]] = []
@@ -140,6 +143,12 @@ class HybridRetriever:
             query=query, filters=filters, hits=hits, independent_publishers=independent_publishers(hits)
         )
 
+    def _with_floor(self, filters: SearchFilters) -> SearchFilters:
+        """Apply the configured credibility floor unless the caller asked for a stricter one."""
+        if filters.min_credibility >= self.config.min_credibility:
+            return filters
+        return filters.model_copy(update={"min_credibility": self.config.min_credibility})
+
     def find_related(self, chunk_id: int, top_k: int = 5, other_publishers_only: bool = True) -> list[EvidenceHit]:
         """Corroboration: passages semantically closest to ``chunk_id``, from other documents/publishers."""
         anchor = self.store.get_evidence([chunk_id]).get(chunk_id)
@@ -150,7 +159,7 @@ class HybridRetriever:
             vec = stored[0]
         else:
             vec = self.embedder.embed_documents([anchor.text])[0]
-        filters = SearchFilters(exclude_document_ids=[anchor.document_id])
+        filters = self._with_floor(SearchFilters(exclude_document_ids=[anchor.document_id]))
         raw = self.store.dense_search(np.asarray(vec), max(top_k * 4, 20), filters, self.embedder.model_name)
         evidence = self.store.get_evidence([c for c, _ in raw])
         anchor_group = (anchor.publisher_group or anchor.publisher).lower()

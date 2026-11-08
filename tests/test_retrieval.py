@@ -72,6 +72,15 @@ def test_single_retriever_modes(corpus_store, embedder, mode):
                for h in res.hits)
 
 
+def test_credibility_floor_filters_low_trust_publishers(corpus_store, embedder):
+    q = "FCAS fighter programme partners"
+    default = HybridRetriever(corpus_store, embedder).search(q, top_k=10)
+    assert "Unknown Blog" in {h.publisher for h in default.hits}  # prior 0.3 > default floor 0.15
+    strict = HybridRetriever(corpus_store, embedder, config=RetrievalConfig(min_credibility=0.5)).search(q, top_k=10)
+    assert strict.hits and "Unknown Blog" not in {h.publisher for h in strict.hits}
+    assert strict.filters.min_credibility == 0.5
+
+
 def test_independent_publisher_count(corpus_store, embedder):
     res = HybridRetriever(corpus_store, embedder).search("Airbus", top_k=10)
     assert res.independent_publishers == len({h.publisher_group for h in res.hits})

@@ -37,7 +37,7 @@ AERO_DATABASE_URL=sqlite:///data/aero_v2.sqlite
 AERO_EMBEDDING_BACKEND=sentence-transformers
 AERO_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 AERO_EMBEDDING_DIM=1024
-AERO_RERANKER_BACKEND=cross-encoder
+AERO_RERANKER_BACKEND=none          # measured 2026-11-08: the cross-encoder lowered nDCG@10 0.51 -> 0.38 on this corpus
 AERO_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
 ```
 

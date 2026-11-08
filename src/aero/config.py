@@ -49,8 +49,12 @@ class Settings(BaseModel):
     retrieval_mode: Literal["hybrid", "dense", "lexical"] = "hybrid"
     retrieval_candidate_k: int = Field(50, ge=5, le=500)
     retrieval_rrf_k: int = Field(60, ge=1)
-    retrieval_credibility_weight: float = Field(0.10, ge=0.0, le=0.5)
-    retrieval_recency_weight: float = Field(0.05, ge=0.0, le=0.5)
+    # Defaults set by the 2026-11-08 ablation (docs/v2-progress.md): ranking on relevance alone beat the
+    # credibility/recency blend (nDCG@10 0.509 vs 0.493, MRR 0.917 vs 0.850). Trust is handled by a floor
+    # (drops content-farm publishers) and reported per hit for the agent's coverage check, not mixed into rank.
+    retrieval_credibility_weight: float = Field(0.0, ge=0.0, le=0.5)
+    retrieval_recency_weight: float = Field(0.0, ge=0.0, le=0.5)
+    retrieval_min_credibility: float = Field(0.15, ge=0.0, le=1.0)
     recency_half_life_days: float = Field(180.0, gt=0)
 
     # --- chunking ------------------------------------------------------------------

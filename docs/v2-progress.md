@@ -75,9 +75,13 @@ questions such as "drone demand grows faster than fighter procurement" (0.00): t
 | **BGE + BM25 hybrid** | **0.49** | **0.58** | **0.85** |
 | BGE + BM25 + bge-reranker-v2-m3 (raw scores blended) | 0.35 | 0.41 | 0.74 |
 
-The reranker *hurt*: it prefers long generic official pages over 10-word headlines, and its compressed raw
-probabilities let the credibility term outvote relevance. Rerank scores are now min-max normalised per query;
-`AERO_RETRIEVAL_MODE` (hybrid/dense/lexical) and the weight settings allow a clean ablation.
+Ablation (6 runs) and resulting defaults: [ADR 0003](adr/0003-model-serving-and-retrieval.md). In short, the reranker
+itself hurts on this headline corpus (0.38 vs 0.51 even without blending), so it is off. Ranking is on relevance
+only, with a 0.15 credibility floor. Hybrid stays the default (dense-only 0.536 is within noise).
+
+**Local v1 agent code** (never pushed) is preserved on branch `v1-local-snapshot`: `app/agent_graph/` (LangGraph
+workflow, scope guard, guardrails, claim map, approval routing) plus Mission Control. Phase 3 ports it onto MCP tools
+and Qwen; see the gap list in the phase-3 plan.
 
 ## Owner decisions (2026-11-07)
 Academic use → `research_mode` (ADR 0004) · Qwen only, local → Qwen3.6-27B on vLLM (ADR 0006) · Data Lab nodes per phase (runbook).

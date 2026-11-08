@@ -16,6 +16,24 @@
 - Each chunk row stores its `embedding_model`. Changing the model re-embeds incrementally and never
   mixes vector spaces.
 
+## Measured (Data Lab, 2026-11-08; 15 queries × 186 docs, draft qrels)
+
+| Run | nDCG@10 | capped R@10 | MRR |
+|---|---|---|---|
+| hybrid, relevance only | 0.509 | 0.585 | 0.917 |
+| hybrid, credibility 0.10 + recency 0.05 blend | 0.493 | 0.579 | 0.850 |
+| hybrid + bge-reranker-v2-m3, relevance only | 0.383 | 0.456 | 0.741 |
+| hybrid + reranker, blended | 0.362 | 0.414 | 0.741 |
+| dense (BGE) only | 0.536 | 0.556 | 0.943 |
+| lexical (BM25) only | 0.406 | 0.505 | 0.710 |
+
+**Decisions**
+- Reranker off by default. On a headline-only corpus it prefers long generic official pages. Re-test once
+  articles carry full text.
+- Rank on relevance only (weights 0). Trust becomes a floor (`AERO_RETRIEVAL_MIN_CREDIBILITY=0.15`, which drops
+  content-farm publishers) and a per-hit field the agent uses in its coverage check.
+- Keep hybrid as the default. Dense-only is +0.03 nDCG, within noise for 15 draft-labelled queries, and BM25
+  matters for exact programme names once documents are longer. Revisit with reviewed labels.
+
 ## Consequences
-Weights are defaults, not tuned values. Change them only with an `aero eval retrieval` run as
-evidence.
+Change any of these only with an `aero eval retrieval` run as evidence.
