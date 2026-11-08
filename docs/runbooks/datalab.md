@@ -58,6 +58,16 @@ aero eval retrieval --qrels evals/datasets/retrieval_qrels.jsonl --out evals/rep
 Commit the two JSON summaries or paste them into `docs/v2-progress.md`. The hashing-embedder floor
 measured in the sandbox is nDCG@10 0.42 / capped Recall@10 0.49 / MRR 0.77.
 
+## After pulling phase 2 (signals, strategy, partners)
+
+```bash
+cd ~/aero-ceo-v2 && source .venv/bin/activate && export HF_HOME=~/hf-cache && git pull -q
+aero db migrate                      # applies 0002
+aero signals extract                 # expect ~191 signals
+aero seed recommendations            # 6 drafts + candidate evidence (BGE)
+aero rec list && aero rec show 1
+```
+
 ## Phase 3 session: serve Qwen with vLLM
 
 The image ships vLLM 0.13.0 (checked 2026-11-08), which is older than the documented minimum for Qwen3.6 (0.19).

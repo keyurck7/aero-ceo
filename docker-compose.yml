@@ -52,7 +52,7 @@ services:
     build: { context: ., args: { EXTRAS: "postgres,mcp" } }
     image: aero-ceo/evidence-mcp:dev
     environment: *aero-env
-    entrypoint: ["sh", "-c", "aero db migrate && aero seed sources"]
+    entrypoint: ["sh", "-c", "aero db migrate && aero seed sources && aero seed recommendations --no-link"]
     depends_on:
       postgres: { condition: service_healthy }
     restart: "no"
@@ -70,6 +70,41 @@ services:
       migrate: { condition: service_completed_successfully }
       tei-embed: { condition: service_healthy }
     restart: unless-stopped
+
+  # signals / strategy / partners need no embeddings (SQL + lexical search only), so no TEI dependency.
+  signals-mcp: &plain-mcp
+    image: aero-ceo/evidence-mcp:dev
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8102"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,signals-mcp:8102"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+    command: ["serve", "signals"]
+    ports: ["127.0.0.1:8102:8102"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  strategy-mcp:
+    <<: *plain-mcp
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8103"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,strategy-mcp:8103"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+      AERO_STRATEGY_ALLOW_WRITES: ${AERO_STRATEGY_ALLOW_WRITES:-false}   # proposals/approvals: opt in
+    command: ["serve", "strategy"]
+    ports: ["127.0.0.1:8103:8103"]
+
+  partners-mcp:
+    <<: *plain-mcp
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8104"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,partners-mcp:8104"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+    command: ["serve", "partners"]
+    ports: ["127.0.0.1:8104:8104"]
 
   worker:
     profiles: [ingest]

@@ -30,9 +30,23 @@ class Taxonomy:
     # Names removed before topic matching: "Airbus Defence and Space" is a company,
     # not evidence about military space (v1 tagged every Airbus article "Military Space").
     ignore_phrases: list[str] = field(default_factory=list)
+    # Prior impact per topic (v1 scoring.impact_score). A prior, not a measurement.
+    topic_impact_weights: dict[str, float] = field(default_factory=dict)
+    business_unit_topics: dict[str, list[str]] = field(default_factory=dict)
+    umbrella_business_units: list[str] = field(default_factory=list)
 
     def topic_names(self) -> list[str]:
         return list(self.topics)
+
+    def business_unit_for(self, topic: str, text: str = "") -> str | None:
+        """Most specific unit owning ``topic``; else best keyword match on ``text`` (umbrella units last)."""
+        owners = [bu for bu, topics in self.business_unit_topics.items() if topic in topics]
+        specific = [bu for bu in owners if bu not in self.umbrella_business_units]
+        if specific:
+            return specific[0]
+        labels = [label for label, _ in match_labels(strip_ignored(text, self), self.business_units)] if text else []
+        labels.sort(key=lambda bu: bu in self.umbrella_business_units)  # stable: specific first
+        return labels[0] if labels else (owners[0] if owners else None)
 
 
 def _compile(keywords: list[str]) -> re.Pattern[str]:
@@ -80,4 +94,7 @@ def load_taxonomy(path: str | Path) -> Taxonomy:
         intents=data.get("intents", {}),
         constraints=data.get("constraints", {}),
         ignore_phrases=data.get("ignore_phrases", []),
+        topic_impact_weights={str(k): float(v) for k, v in data.get("topic_impact_weights", {}).items()},
+        business_unit_topics=data.get("business_unit_topics", {}),
+        umbrella_business_units=data.get("umbrella_business_units", []),
     )

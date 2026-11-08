@@ -9,7 +9,7 @@ Decisions: [`docs/adr/`](adr/).
 |---|---|---|
 | 0 · Harden baseline | settings, deps, tests, CI, critical bug fixes | ✅ done in v2 code (v1 `app/` left frozen) |
 | 1 · Data platform | Postgres+pgvector / SQLite adapters, migrations, hybrid search + rerank, incremental embedding, v1 importer, eval harness | ✅ code + tests · ⏳ Postgres run in CI · ⏳ qrels need labels |
-| 2 · MCP servers | evidence ✅ · signals ⏳ · strategy (+ drill-down prompts) ⏳ · partners ⏳ | 🟡 1 of 4 |
+| 2 · MCP servers | evidence ✅ · signals ✅ · strategy (+ 7 drill-down prompts, approval gate) ✅ · partners ✅ | ✅ 4 of 4 ([ADR 0007](adr/0007-signals-strategy-partners.md)) |
 | 3 · Agent | LangGraph graph, vLLM + LiteLLM, API gateway, thin UI | ⬜ next |
 | 4 · Verification & HITL | verify-mcp, repair loop, approvals | ⬜ |
 | 5 · Pipelines, observability, eval gates | Prefect, LLM signal extraction, OTel + Langfuse, DeepEval/promptfoo | ⬜ (flows are Prefect-ready) |
@@ -82,6 +82,10 @@ only, with a 0.15 credibility floor. Hybrid stays the default (dense-only 0.536 
 **Local v1 agent code** (never pushed) is preserved on branch `v1-local-snapshot`: `app/agent_graph/` (LangGraph
 workflow, scope guard, guardrails, claim map, approval routing) plus Mission Control. Phase 3 ports it onto MCP tools
 and Qwen; see the gap list in the phase-3 plan.
+
+**Phase 2 on the real corpus** (2026-11-08): 191 grounded signals on 116/186 documents (v1: 595 ungrounded);
+business units by topic (FCAS 70, Uncrewed 56, Eurofighter 31, Space 18 …); v1's 6 blueprints imported as drafts
+with 36 candidate evidence links. The approval gate blocks "military space": all its evidence is Airbus's own pages.
 
 ## Owner decisions (2026-11-07)
 Academic use → `research_mode` (ADR 0004) · Qwen only, local → Qwen3.6-27B on vLLM (ADR 0006) · Data Lab nodes per phase (runbook).

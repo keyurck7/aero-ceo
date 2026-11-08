@@ -17,10 +17,29 @@ from typing import Any, cast
 
 import numpy as np
 
-from aero.domain import ChunkIn, Document, DocumentIn, EvidenceChunk, SearchFilters, Source, SourceIn, StoreStats
+from aero.domain import (
+    ChunkIn,
+    Document,
+    DocumentIn,
+    EvidenceChunk,
+    EvidenceLinkIn,
+    Recommendation,
+    RecommendationEvidence,
+    RecommendationIn,
+    RecommendationReview,
+    RecommendationStatus,
+    SearchFilters,
+    Signal,
+    SignalFilters,
+    SignalIn,
+    Source,
+    SourceIn,
+    StoreStats,
+)
 from aero.storage.base import (
     DuplicateDocumentError,
     Store,
+    check_transition,
     doc_simhash_columns,
     is_near_duplicate,
     lexical_terms,
@@ -331,6 +350,202 @@ class PostgresStore(Store):
             {"id": chunk_id, "w": window},
         )
         return [self._evidence(r) for r in rows]
+
+    def document_chunks(self, document_id: int) -> list[EvidenceChunk]:
+        rows = self._q(f"{_EVIDENCE_SELECT} WHERE c.document_id = %s ORDER BY c.chunk_index", (document_id,))
+        return [self._evidence(r) for r in rows]
+
+    # ------------------------------------------------------------------ signals
+    def replace_signals(self, document_id: int, extractor: str, signals: Sequence[SignalIn]) -> int:
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute("DELETE FROM signals WHERE document_id = %s AND extractor = %s", (document_id, extractor))
+            for sig in signals:
+                if sig.document_id != document_id or sig.extractor != extractor:
+                    raise ValueError("signal does not belong to this document/extractor")
+                conn.execute(
+                    """INSERT INTO signals (document_id, chunk_id, signal_type, title, description, topic,
+                         business_unit, evidence_quote, quote_start, quote_end, impact, confidence, extractor)
+                       VALUES (%(document_id)s, %(chunk_id)s, %(signal_type)s, %(title)s, %(description)s,
+                         %(topic)s, %(business_unit)s, %(evidence_quote)s, %(quote_start)s, %(quote_end)s,
+                         %(impact)s, %(confidence)s, %(extractor)s)""",
+                    sig.model_dump(),
+                )
+        return len(signals)
+
+    _SIGNAL_SELECT = """
+        SELECT g.*, d.title AS document_title, d.url, d.published_at, s.name AS publisher, s.source_type,
+               s.credibility_prior
+        FROM signals g JOIN documents d ON d.id = g.document_id JOIN sources s ON s.id = d.source_id"""
+
+    def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
+        where: list[str] = []
+        p: dict[str, Any] = {"limit": limit}
+        for column, name, values in (("g.signal_type", "types", filters.signal_types),
+                                     ("g.topic", "topics", filters.topics),
+                                     ("g.business_unit", "bus", filters.business_units)):
+            if values:
+                where.append(f"{column} = ANY(%({name})s::text[])")
+                p[name] = list(values)
+        if filters.extractor:
+            where.append("g.extractor = %(extractor)s")
+            p["extractor"] = filters.extractor
+        if filters.published_after:
+            where.append("d.published_at >= %(after)s")
+            p["after"] = filters.published_after
+        if filters.published_before:
+            where.append("d.published_at < %(before)s")
+            p["before"] = filters.published_before
+        if filters.min_impact > 0:
+            where.append("g.impact >= %(min_impact)s")
+            p["min_impact"] = filters.min_impact
+        clause = " AND ".join(where) if where else "TRUE"
+        rows = self._q(
+            f"{self._SIGNAL_SELECT} WHERE {clause} "
+            "ORDER BY g.impact DESC, g.confidence DESC, d.published_at DESC NULLS LAST, g.id LIMIT %(limit)s",
+            p,
+        )
+        return [Signal(**r) for r in rows]
+
+    def get_signal(self, signal_id: int) -> Signal | None:
+        rows = self._q(f"{self._SIGNAL_SELECT} WHERE g.id = %s", (signal_id,))
+        return Signal(**rows[0]) if rows else None
+
+    # ------------------------------------------------------------------ recommendations
+    @staticmethod
+    def _recommendation(row: dict[str, Any]) -> Recommendation:
+        data = dict(row)
+        data["topics"] = list(row["topics"] or [])
+        data["signal_titles"] = list(row["signal_titles"] or [])
+        return Recommendation(**data)
+
+    def upsert_recommendation(self, rec: RecommendationIn) -> Recommendation:
+        params = {**rec.model_dump(), "signal_titles": Jsonb(rec.signal_titles)}
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute(
+                """INSERT INTO recommendations (key, version, status, title, business_unit, topics, priority,
+                     recommendation, expected_impact, risk_assessment, signal_titles, created_by)
+                   VALUES (%(key)s, %(version)s, %(status)s, %(title)s, %(business_unit)s, %(topics)s,
+                     %(priority)s, %(recommendation)s, %(expected_impact)s, %(risk_assessment)s,
+                     %(signal_titles)s, %(created_by)s)
+                   ON CONFLICT (key, version) DO UPDATE SET title = EXCLUDED.title,
+                     business_unit = EXCLUDED.business_unit, topics = EXCLUDED.topics,
+                     priority = EXCLUDED.priority, recommendation = EXCLUDED.recommendation,
+                     expected_impact = EXCLUDED.expected_impact, risk_assessment = EXCLUDED.risk_assessment,
+                     signal_titles = EXCLUDED.signal_titles, updated_at = now()
+                   WHERE recommendations.status = 'draft'""",
+                params,
+            )
+            row = conn.execute("SELECT * FROM recommendations WHERE key = %s AND version = %s",
+                               (rec.key, rec.version)).fetchone()
+        assert row is not None
+        return self._recommendation(cast(dict[str, Any], row))
+
+    def get_recommendation(self, recommendation_id: int) -> Recommendation | None:
+        rows = self._q("SELECT * FROM recommendations WHERE id = %s", (recommendation_id,))
+        return self._recommendation(rows[0]) if rows else None
+
+    def list_recommendations(
+        self,
+        status: RecommendationStatus | None = None,
+        topic: str | None = None,
+        business_unit: str | None = None,
+        key: str | None = None,
+        limit: int = 50,
+    ) -> list[Recommendation]:
+        where: list[str] = []
+        p: dict[str, Any] = {"limit": limit}
+        if status:
+            where.append("r.status = %(status)s")
+            p["status"] = status
+        if topic:
+            where.append("%(topic)s = ANY(r.topics)")
+            p["topic"] = topic
+        if business_unit:
+            where.append("r.business_unit = %(bu)s")
+            p["bu"] = business_unit
+        if key:
+            where.append("r.key = %(key)s")
+            p["key"] = key
+        clause = " AND ".join(where) if where else "TRUE"
+        rows = self._q(
+            f"""SELECT * FROM recommendations r WHERE {clause}
+                ORDER BY CASE r.priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, r.key, r.version DESC
+                LIMIT %(limit)s""",
+            p,
+        )
+        return [self._recommendation(r) for r in rows]
+
+    def set_recommendation_status(
+        self, recommendation_id: int, status: RecommendationStatus, reviewer: str, reason: str
+    ) -> Recommendation:
+        if not reviewer.strip() or not reason.strip():
+            raise ValueError("reviewer and reason are required for every status change")
+        with self.pool.connection() as conn, conn.transaction():
+            row = conn.execute("SELECT status FROM recommendations WHERE id = %s FOR UPDATE",
+                               (recommendation_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"recommendation {recommendation_id} not found")
+            current = cast(dict[str, Any], row)["status"]
+            check_transition(current, status)
+            approved = status == "approved"
+            conn.execute(
+                """UPDATE recommendations SET status = %(status)s, status_reason = %(reason)s, updated_at = now(),
+                     approved_by = CASE WHEN %(approved)s THEN %(reviewer)s ELSE approved_by END,
+                     approved_at = CASE WHEN %(approved)s THEN now() ELSE approved_at END
+                   WHERE id = %(id)s""",
+                {"status": status, "reason": reason, "approved": approved, "reviewer": reviewer,
+                 "id": recommendation_id},
+            )
+            conn.execute(
+                """INSERT INTO recommendation_reviews (recommendation_id, from_status, to_status, reviewer, reason)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (recommendation_id, current, status, reviewer, reason),
+            )
+        result = self.get_recommendation(recommendation_id)
+        assert result is not None
+        return result
+
+    def link_recommendation_evidence(
+        self, recommendation_id: int, links: Sequence[EvidenceLinkIn], overwrite: bool = False
+    ) -> int:
+        conflict = (
+            "DO UPDATE SET relation = EXCLUDED.relation, score = EXCLUDED.score, linked_by = EXCLUDED.linked_by, "
+            "note = EXCLUDED.note" if overwrite else "DO NOTHING"
+        )
+        written = 0
+        with self.pool.connection() as conn, conn.transaction():
+            for link in links:
+                cur = conn.execute(
+                    f"""INSERT INTO recommendation_evidence (recommendation_id, chunk_id, relation, score, linked_by,
+                          note) VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (recommendation_id, chunk_id) {conflict}""",
+                    (recommendation_id, link.chunk_id, link.relation, link.score, link.linked_by, link.note),
+                )
+                written += max(cur.rowcount, 0)
+        return written
+
+    def recommendation_evidence(self, recommendation_id: int) -> list[RecommendationEvidence]:
+        rows = self._q(
+            """SELECT chunk_id, relation, score, linked_by, note FROM recommendation_evidence
+               WHERE recommendation_id = %s
+               ORDER BY CASE relation WHEN 'supports' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+                        score DESC NULLS LAST, chunk_id""",
+            (recommendation_id,),
+        )
+        evidence = self.get_evidence([r["chunk_id"] for r in rows])
+        return [
+            RecommendationEvidence(evidence=evidence[r["chunk_id"]], relation=r["relation"], score=r["score"],
+                                   linked_by=r["linked_by"], note=r["note"])
+            for r in rows if r["chunk_id"] in evidence
+        ]
+
+    def recommendation_reviews(self, recommendation_id: int) -> list[RecommendationReview]:
+        rows = self._q(
+            """SELECT recommendation_id, from_status, to_status, reviewer, reason, created_at
+               FROM recommendation_reviews WHERE recommendation_id = %s ORDER BY id""",
+            (recommendation_id,),
+        )
+        return [RecommendationReview(**r) for r in rows]
 
     # ------------------------------------------------------------------ runs & stats
     def start_run(self, flow: str, params: dict[str, Any]) -> int:

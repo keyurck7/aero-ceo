@@ -20,6 +20,10 @@ from aero.ingestion.collectors import SourcePlan, collect_news, collect_official
 from aero.ingestion.http import PoliteFetcher
 from aero.ingestion.migrate_v1 import migrate_v1
 from aero.ingestion.pipeline import Ingestor, RawItem
+from aero.intelligence.signals import RuleSignalExtractor, load_signal_rules, run_extraction
+from aero.intelligence.strategy import load_recommendation_seeds
+from aero.intelligence.strategy import seed_recommendations as _seed_recommendations
+from aero.retrieval import HybridRetriever
 from aero.log import get_logger
 from aero.storage import Store
 from aero.taxonomy import load_taxonomy
@@ -50,6 +54,7 @@ def _run(store: Store, settings: Settings, embedder: Embedder, flow: str, params
             res = ingestor.ingest(item, run_id=run_id)
             stats[res.outcome if res.outcome != "duplicate" else f"duplicate_{res.detail}"] += 1
         stats["embedded_chunks"] = ingestor.embed_pending()
+        stats["signals"] = extract_signals(store, settings)["signals"]
         stats["injection_flagged"] = ingestor.counts["injection_flagged"]
         store.finish_run(run_id, "succeeded", dict(stats))
     except Exception as exc:
@@ -77,6 +82,20 @@ def ingest_news(store: Store, settings: Settings, embedder: Embedder, per_query:
 
 def import_v1(store: Store, settings: Settings, embedder: Embedder, v1_path: str) -> dict[str, Any]:
     return _run(store, settings, embedder, "import_v1", {"path": v1_path}, v1_path=v1_path)
+
+
+def extract_signals(store: Store, settings: Settings, document_ids: Iterable[int] | None = None) -> Counter[str]:
+    seeds = Path(settings.seeds_dir)
+    extractor = RuleSignalExtractor(load_signal_rules(seeds / "signal_rules_v1.yaml"),
+                                    load_taxonomy(seeds / "taxonomy.yaml"))
+    return run_extraction(store, extractor, document_ids)
+
+
+def seed_recommendations(store: Store, settings: Settings, retriever: HybridRetriever | None) -> Counter[str]:
+    seeds = Path(settings.seeds_dir)
+    recs = load_recommendation_seeds(seeds / "recommendations_v1.yaml", load_taxonomy(seeds / "taxonomy.yaml"),
+                                     seeds / "signal_rules_v1.yaml")
+    return _seed_recommendations(store, retriever, recs)
 
 
 def embed_pending(store: Store, settings: Settings, embedder: Embedder) -> int:

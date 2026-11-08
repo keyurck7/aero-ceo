@@ -19,10 +19,29 @@ from typing import Any
 import numpy as np
 
 from aero.dates import from_db, to_db, utcnow
-from aero.domain import ChunkIn, Document, DocumentIn, EvidenceChunk, SearchFilters, Source, SourceIn, StoreStats
+from aero.domain import (
+    ChunkIn,
+    Document,
+    DocumentIn,
+    EvidenceChunk,
+    EvidenceLinkIn,
+    Recommendation,
+    RecommendationEvidence,
+    RecommendationIn,
+    RecommendationReview,
+    RecommendationStatus,
+    SearchFilters,
+    Signal,
+    SignalFilters,
+    SignalIn,
+    Source,
+    SourceIn,
+    StoreStats,
+)
 from aero.storage.base import (
     DuplicateDocumentError,
     Store,
+    check_transition,
     doc_simhash_columns,
     is_near_duplicate,
     lexical_terms,
@@ -377,6 +396,208 @@ class SQLiteStore(Store):
         )
         topics = self._topics_for({r["document_id"] for r in rows})
         return [self._evidence(r, topics) for r in rows]
+
+    def document_chunks(self, document_id: int) -> list[EvidenceChunk]:
+        rows = self._q(f"{_EVIDENCE_SELECT} WHERE c.document_id = ? ORDER BY c.chunk_index", (document_id,))
+        topics = self._topics_for({document_id})
+        return [self._evidence(r, topics) for r in rows]
+
+    # ------------------------------------------------------------------ signals
+    def replace_signals(self, document_id: int, extractor: str, signals: Sequence[SignalIn]) -> int:
+        with self._tx() as cur:
+            cur.execute("DELETE FROM signals WHERE document_id = ? AND extractor = ?", (document_id, extractor))
+            for sig in signals:
+                if sig.document_id != document_id or sig.extractor != extractor:
+                    raise ValueError("signal does not belong to this document/extractor")
+                cur.execute(
+                    """INSERT INTO signals (document_id, chunk_id, signal_type, title, description, topic,
+                         business_unit, evidence_quote, quote_start, quote_end, impact, confidence, extractor)
+                       VALUES (:document_id, :chunk_id, :signal_type, :title, :description, :topic,
+                         :business_unit, :evidence_quote, :quote_start, :quote_end, :impact, :confidence,
+                         :extractor)""",
+                    sig.model_dump(),
+                )
+        return len(signals)
+
+    _SIGNAL_SELECT = """
+        SELECT g.*, d.title AS document_title, d.url, d.published_at, s.name AS publisher, s.source_type,
+               s.credibility_prior
+        FROM signals g JOIN documents d ON d.id = g.document_id JOIN sources s ON s.id = d.source_id"""
+
+    def _signal(self, row: sqlite3.Row) -> Signal:
+        data = {k: row[k] for k in row.keys()}  # noqa: SIM118 - sqlite3.Row is not a dict
+        data["extracted_at"] = self._ts(row["extracted_at"])
+        data["published_at"] = from_db(row["published_at"])
+        return Signal(**data)
+
+    def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
+        where: list[str] = []
+        params: list[Any] = []
+        for column, values in (("g.signal_type", filters.signal_types), ("g.topic", filters.topics),
+                               ("g.business_unit", filters.business_units)):
+            if values:
+                where.append(f"{column} IN ({','.join('?' * len(values))})")
+                params += list(values)
+        if filters.extractor:
+            where.append("g.extractor = ?")
+            params.append(filters.extractor)
+        if filters.published_after:
+            where.append("d.published_at >= ?")
+            params.append(to_db(filters.published_after))
+        if filters.published_before:
+            where.append("d.published_at < ?")
+            params.append(to_db(filters.published_before))
+        if filters.min_impact > 0:
+            where.append("g.impact >= ?")
+            params.append(filters.min_impact)
+        clause = " AND ".join(where) if where else "1=1"
+        rows = self._q(
+            f"{self._SIGNAL_SELECT} WHERE {clause} "
+            "ORDER BY g.impact DESC, g.confidence DESC, d.published_at DESC NULLS LAST, g.id LIMIT ?",
+            [*params, limit],
+        )
+        return [self._signal(r) for r in rows]
+
+    def get_signal(self, signal_id: int) -> Signal | None:
+        rows = self._q(f"{self._SIGNAL_SELECT} WHERE g.id = ?", (signal_id,))
+        return self._signal(rows[0]) if rows else None
+
+    # ------------------------------------------------------------------ recommendations
+    def _recommendation(self, row: sqlite3.Row) -> Recommendation:
+        data = {k: row[k] for k in row.keys()}  # noqa: SIM118
+        data["topics"] = json.loads(row["topics"])
+        data["signal_titles"] = json.loads(row["signal_titles"])
+        for col in ("created_at", "updated_at"):
+            data[col] = self._ts(row[col])
+        data["approved_at"] = from_db(row["approved_at"])
+        return Recommendation(**data)
+
+    def upsert_recommendation(self, rec: RecommendationIn) -> Recommendation:
+        params = {**rec.model_dump(), "topics": json.dumps(rec.topics), "signal_titles": json.dumps(rec.signal_titles),
+                  "now": to_db(utcnow())}
+        with self._tx() as cur:
+            cur.execute(
+                """INSERT INTO recommendations (key, version, status, title, business_unit, topics, priority,
+                     recommendation, expected_impact, risk_assessment, signal_titles, created_by)
+                   VALUES (:key, :version, :status, :title, :business_unit, :topics, :priority, :recommendation,
+                     :expected_impact, :risk_assessment, :signal_titles, :created_by)
+                   ON CONFLICT (key, version) DO UPDATE SET title = excluded.title,
+                     business_unit = excluded.business_unit, topics = excluded.topics,
+                     priority = excluded.priority, recommendation = excluded.recommendation,
+                     expected_impact = excluded.expected_impact, risk_assessment = excluded.risk_assessment,
+                     signal_titles = excluded.signal_titles, updated_at = :now
+                   WHERE recommendations.status = 'draft'""",
+                params,
+            )
+            row = cur.execute("SELECT * FROM recommendations WHERE key = ? AND version = ?",
+                              (rec.key, rec.version)).fetchone()
+        return self._recommendation(row)
+
+    def get_recommendation(self, recommendation_id: int) -> Recommendation | None:
+        rows = self._q("SELECT * FROM recommendations WHERE id = ?", (recommendation_id,))
+        return self._recommendation(rows[0]) if rows else None
+
+    def list_recommendations(
+        self,
+        status: RecommendationStatus | None = None,
+        topic: str | None = None,
+        business_unit: str | None = None,
+        key: str | None = None,
+        limit: int = 50,
+    ) -> list[Recommendation]:
+        where: list[str] = []
+        params: list[Any] = []
+        if status:
+            where.append("r.status = ?")
+            params.append(status)
+        if topic:
+            where.append("EXISTS (SELECT 1 FROM json_each(r.topics) WHERE value = ?)")
+            params.append(topic)
+        if business_unit:
+            where.append("r.business_unit = ?")
+            params.append(business_unit)
+        if key:
+            where.append("r.key = ?")
+            params.append(key)
+        clause = " AND ".join(where) if where else "1=1"
+        rows = self._q(
+            f"""SELECT * FROM recommendations r WHERE {clause}
+                ORDER BY CASE r.priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, r.key, r.version DESC
+                LIMIT ?""",
+            [*params, limit],
+        )
+        return [self._recommendation(r) for r in rows]
+
+    def set_recommendation_status(
+        self, recommendation_id: int, status: RecommendationStatus, reviewer: str, reason: str
+    ) -> Recommendation:
+        if not reviewer.strip() or not reason.strip():
+            raise ValueError("reviewer and reason are required for every status change")
+        now = to_db(utcnow())
+        with self._tx() as cur:
+            row = cur.execute("SELECT status FROM recommendations WHERE id = ?", (recommendation_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"recommendation {recommendation_id} not found")
+            check_transition(row["status"], status)
+            approved = status == "approved"
+            cur.execute(
+                """UPDATE recommendations SET status = ?, status_reason = ?, updated_at = ?,
+                     approved_by = CASE WHEN ? THEN ? ELSE approved_by END,
+                     approved_at = CASE WHEN ? THEN ? ELSE approved_at END
+                   WHERE id = ?""",
+                (status, reason, now, approved, reviewer, approved, now, recommendation_id),
+            )
+            cur.execute(
+                """INSERT INTO recommendation_reviews (recommendation_id, from_status, to_status, reviewer, reason)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (recommendation_id, row["status"], status, reviewer, reason),
+            )
+        result = self.get_recommendation(recommendation_id)
+        assert result is not None
+        return result
+
+    def link_recommendation_evidence(
+        self, recommendation_id: int, links: Sequence[EvidenceLinkIn], overwrite: bool = False
+    ) -> int:
+        conflict = (
+            "DO UPDATE SET relation = excluded.relation, score = excluded.score, linked_by = excluded.linked_by, "
+            "note = excluded.note" if overwrite else "DO NOTHING"
+        )
+        written = 0
+        with self._tx() as cur:
+            for link in links:
+                written += cur.execute(
+                    f"""INSERT INTO recommendation_evidence (recommendation_id, chunk_id, relation, score, linked_by,
+                          note) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (recommendation_id, chunk_id) {conflict}""",
+                    (recommendation_id, link.chunk_id, link.relation, link.score, link.linked_by, link.note),
+                ).rowcount
+        return written
+
+    def recommendation_evidence(self, recommendation_id: int) -> list[RecommendationEvidence]:
+        rows = self._q(
+            """SELECT chunk_id, relation, score, linked_by, note FROM recommendation_evidence
+               WHERE recommendation_id = ?
+               ORDER BY CASE relation WHEN 'supports' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+                        score DESC NULLS LAST, chunk_id""",
+            (recommendation_id,),
+        )
+        evidence = self.get_evidence([r["chunk_id"] for r in rows])
+        return [
+            RecommendationEvidence(evidence=evidence[r["chunk_id"]], relation=r["relation"], score=r["score"],
+                                   linked_by=r["linked_by"], note=r["note"])
+            for r in rows if r["chunk_id"] in evidence
+        ]
+
+    def recommendation_reviews(self, recommendation_id: int) -> list[RecommendationReview]:
+        rows = self._q("SELECT * FROM recommendation_reviews WHERE recommendation_id = ? ORDER BY id",
+                       (recommendation_id,))
+        return [
+            RecommendationReview(recommendation_id=r["recommendation_id"], from_status=r["from_status"],
+                                 to_status=r["to_status"], reviewer=r["reviewer"], reason=r["reason"],
+                                 created_at=self._ts(r["created_at"]))
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------ runs & stats
     def start_run(self, flow: str, params: dict[str, Any]) -> int:

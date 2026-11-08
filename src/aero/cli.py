@@ -5,7 +5,10 @@
     aero ingest official|news|v1 PATH
     aero embed
     aero search "query" [--topic T] [--source-type official] [--json]
-    aero serve evidence [--stdio]
+    aero signals extract
+    aero seed recommendations [--no-link]
+    aero rec list | show ID | approve ID | retire ID  --reviewer NAME --reason TEXT
+    aero serve evidence|signals|strategy|partners|all [--stdio]
     aero eval pool --queries Q.jsonl --out pool.jsonl
     aero eval labels --pool pool.jsonl --out qrels.jsonl
     aero eval retrieval --qrels qrels.jsonl [--min-recall 0.8]
@@ -109,14 +112,64 @@ def cmd_search(args: argparse.Namespace, s: Settings) -> int:
     return 0
 
 
+def cmd_signals(args: argparse.Namespace, s: Settings) -> int:
+    from aero.flows import extract_signals
+
+    with _store(s, migrate=True) as store:
+        _print(dict(extract_signals(store, s)))
+    return 0
+
+
+def cmd_seed_recommendations(args: argparse.Namespace, s: Settings) -> int:
+    from aero.flows import seed_recommendations
+
+    with _store(s, migrate=True) as store:
+        retriever = None if args.no_link else _retriever(s, store)
+        _print(dict(seed_recommendations(store, s, retriever)))
+    return 0
+
+
+def cmd_rec(args: argparse.Namespace, s: Settings) -> int:
+    from aero.intelligence.strategy import ApprovalBlockedError, change_status, independent_publishers
+    from aero.storage.base import InvalidTransitionError
+
+    with _store(s, migrate=True) as store:
+        if args.action == "list":
+            for r in store.list_recommendations(limit=200):
+                print(f"#{r.id:<4} v{r.version} {r.status:<9} {r.priority:<6} {r.title}")
+            return 0
+        if args.id is None:
+            print("an id is required", file=sys.stderr)
+            return 2
+        if args.action in ("approve", "retire"):
+            if not (args.reviewer and args.reason):
+                print("--reviewer and --reason are required", file=sys.stderr)
+                return 2
+            target = "approved" if args.action == "approve" else "retired"
+            try:
+                change_status(store, args.id, target, args.reviewer, args.reason)
+            except (ApprovalBlockedError, InvalidTransitionError, KeyError) as exc:
+                print(f"refused: {exc}", file=sys.stderr)
+                return 1
+        rec = store.get_recommendation(args.id)
+        if rec is None:
+            print(f"recommendation {args.id} not found", file=sys.stderr)
+            return 1
+        ev = store.recommendation_evidence(rec.id)
+        print(f"#{rec.id} v{rec.version} [{rec.status}] {rec.title}\n{rec.recommendation}\n")
+        print(f"evidence: {len(ev)} chunks from {independent_publishers(ev)} independent publishers")
+        for e in ev:
+            print(f"  [{e.relation}] C{e.evidence.chunk_id} {e.evidence.publisher}: {e.evidence.title[:90]}")
+        for review in store.recommendation_reviews(rec.id):
+            print(f"  review: {review.from_status} -> {review.to_status} by {review.reviewer}: {review.reason}")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace, s: Settings) -> int:
-    from pathlib import Path as _P
+    from aero.mcp_servers.registry import ServerDeps, build_server
 
-    from aero.mcp_servers.evidence import build_evidence_server
-    from aero.taxonomy import load_taxonomy
-
-    store = _store(s)
-    server = build_evidence_server(store, _retriever(s, store), load_taxonomy(_P(s.seeds_dir) / "taxonomy.yaml"))
+    store = _store(s, migrate=True)
+    server = build_server(args.server, ServerDeps.from_settings(s, store))
     if args.stdio:
         server.run("stdio")
         return 0
@@ -166,8 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
     db.set_defaults(fn=cmd_db)
 
     seed = sub.add_parser("seed", help="load seed data")
-    seed.add_argument("what", choices=["sources"])
-    seed.set_defaults(fn=cmd_seed)
+    seed_sub = seed.add_subparsers(dest="what", required=True)
+    seed_sub.add_parser("sources").set_defaults(fn=cmd_seed)
+    seed_rec = seed_sub.add_parser("recommendations", help="v1 blueprints as drafts + auto-linked evidence")
+    seed_rec.add_argument("--no-link", action="store_true", help="skip evidence auto-linking (no embedder needed)")
+    seed_rec.set_defaults(fn=cmd_seed_recommendations)
 
     ing = sub.add_parser("ingest", help="collect and index evidence")
     ing_sub = ing.add_subparsers(dest="kind", required=True)
@@ -192,8 +248,19 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--json", action="store_true")
     se.set_defaults(fn=cmd_search)
 
+    sig = sub.add_parser("signals", help="strategic signal extraction")
+    sig.add_argument("action", choices=["extract"])
+    sig.set_defaults(fn=cmd_signals)
+
+    rec = sub.add_parser("rec", help="review recommendations (human-in-the-loop)")
+    rec.add_argument("action", choices=["list", "show", "approve", "retire"])
+    rec.add_argument("id", type=int, nargs="?")
+    rec.add_argument("--reviewer")
+    rec.add_argument("--reason")
+    rec.set_defaults(fn=cmd_rec)
+
     sv = sub.add_parser("serve", help="run an MCP server")
-    sv.add_argument("server", choices=["evidence"])
+    sv.add_argument("server", choices=["evidence", "signals", "strategy", "partners", "all"])
     sv.add_argument("--stdio", action="store_true", help="stdio transport (Claude Desktop, MCP Inspector)")
     sv.set_defaults(fn=cmd_serve)
 

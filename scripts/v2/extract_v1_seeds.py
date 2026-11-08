@@ -82,6 +82,10 @@ def main() -> None:
         "topics": topics,
         "topic_impact_weights": impact_weights,
         "business_units": bu_keywords,
+        # Topic -> business unit (v1 BUSINESS_UNITS). Umbrella units are used only when nothing specific fits.
+        "business_unit_topics": {name: list(spec.get("topics", [])) for name, spec in business_units.items()
+                                 if isinstance(spec, dict)},
+        "umbrella_business_units": ["Airbus Defence and Space", "Airbus Corporate / Group Strategy"],
         "regions": {k: clean_keywords(v) for k, v in literal("app/agents/query_router.py", "REGION_RULES").items()},
         "intents": {k: clean_keywords(v) for k, v in literal("app/agents/query_router.py", "INTENT_RULES").items()},
         "constraints": {
@@ -161,8 +165,9 @@ def main() -> None:
     blueprints = literal("app/agents/ceo_recommendation_engine.py", "RECOMMENDATION_BLUEPRINTS")
     dump(SEEDS / "recommendations_v1.yaml", "v1 recommendation blueprints, imported as version 1", {
         "version": VERSION,
-        "status_on_import": "approved",
-        "notes": "Hand-written in v1 (finding B8). v2 regenerates drafts from evidence; these are the baseline.",
+        "status_on_import": "draft",
+        "notes": ("Hand-written in v1 without verified evidence (finding B8). Imported as drafts with candidate "
+                  "evidence auto-linked; a named reviewer approves them (needs 2+ independent publishers)."),
         "recommendations": [{"key": slug(b["title"])[:60], **b} for b in blueprints],
     })
 

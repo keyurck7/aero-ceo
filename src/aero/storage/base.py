@@ -19,7 +19,26 @@ from typing import Any
 
 import numpy as np
 
-from aero.domain import ChunkIn, Document, DocumentIn, EvidenceChunk, SearchFilters, Source, SourceIn, StoreStats
+from aero.domain import (
+    ALLOWED_TRANSITIONS,
+    ChunkIn,
+    Document,
+    DocumentIn,
+    EvidenceChunk,
+    EvidenceLinkIn,
+    Recommendation,
+    RecommendationEvidence,
+    RecommendationIn,
+    RecommendationReview,
+    RecommendationStatus,
+    SearchFilters,
+    Signal,
+    SignalFilters,
+    SignalIn,
+    Source,
+    SourceIn,
+    StoreStats,
+)
 from aero.text import from_signed64, hamming64, to_signed64
 
 # Measured on 3-word-shingle SimHash: a byline/footer moves a 300-word article by <= ~11 bits
@@ -65,6 +84,16 @@ class DuplicateDocumentError(Exception):
         super().__init__(f"duplicate of document {existing_id} ({reason})")
         self.existing_id = existing_id
         self.reason = reason
+
+
+class InvalidTransitionError(ValueError):
+    pass
+
+
+def check_transition(current: str, target: str) -> None:
+    if target not in ALLOWED_TRANSITIONS.get(current, set()):
+        allowed = sorted(ALLOWED_TRANSITIONS.get(current, set())) or ["none (terminal)"]
+        raise InvalidTransitionError(f"cannot move a {current} recommendation to {target}; allowed: {allowed}")
 
 
 class Store(ABC):
@@ -144,6 +173,59 @@ class Store(ABC):
     @abstractmethod
     def get_neighbours(self, chunk_id: int, window: int = 1) -> list[EvidenceChunk]:
         """The chunk plus up to ``window`` chunks either side, in document order."""
+
+    @abstractmethod
+    def document_chunks(self, document_id: int) -> list[EvidenceChunk]:
+        """All chunks of a document in order, with citation metadata."""
+
+    # ---- signals (migration 0002) ----------------------------------------------------
+    @abstractmethod
+    def replace_signals(self, document_id: int, extractor: str, signals: Sequence[SignalIn]) -> int:
+        """Atomically replace one extractor's signals for one document (idempotent re-extraction)."""
+
+    @abstractmethod
+    def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
+        """Highest impact first, then confidence, then most recent."""
+
+    @abstractmethod
+    def get_signal(self, signal_id: int) -> Signal | None: ...
+
+    # ---- recommendations (migration 0002) --------------------------------------------
+    @abstractmethod
+    def upsert_recommendation(self, rec: RecommendationIn) -> Recommendation:
+        """Insert by (key, version). An existing row is updated only while it is still a draft."""
+
+    @abstractmethod
+    def get_recommendation(self, recommendation_id: int) -> Recommendation | None: ...
+
+    @abstractmethod
+    def list_recommendations(
+        self,
+        status: RecommendationStatus | None = None,
+        topic: str | None = None,
+        business_unit: str | None = None,
+        key: str | None = None,
+        limit: int = 50,
+    ) -> list[Recommendation]: ...
+
+    @abstractmethod
+    def set_recommendation_status(
+        self, recommendation_id: int, status: RecommendationStatus, reviewer: str, reason: str
+    ) -> Recommendation:
+        """Validated lifecycle transition plus an audit row, in one transaction."""
+
+    @abstractmethod
+    def link_recommendation_evidence(
+        self, recommendation_id: int, links: Sequence[EvidenceLinkIn], overwrite: bool = False
+    ) -> int:
+        """Attach chunk-level evidence. With ``overwrite=False`` existing links are kept (auto-linkers
+        must never downgrade a human- or verifier-set relation)."""
+
+    @abstractmethod
+    def recommendation_evidence(self, recommendation_id: int) -> list[RecommendationEvidence]: ...
+
+    @abstractmethod
+    def recommendation_reviews(self, recommendation_id: int) -> list[RecommendationReview]: ...
 
     # ---- pipeline runs & stats --------------------------------------------------------
     @abstractmethod

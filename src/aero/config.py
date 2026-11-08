@@ -79,6 +79,8 @@ class Settings(BaseModel):
     mcp_allowed_hosts: str = ""
     # Interim shared-secret auth until the OAuth 2.1 MCP gateway exists (roadmap phase 6). Empty = no auth.
     mcp_bearer_token: str = ""
+    # strategy-mcp write tools (propose / approve / retire). Off by default: least privilege.
+    strategy_allow_writes: bool = False
 
     @property
     def mcp_allowed_host_list(self) -> list[str]:

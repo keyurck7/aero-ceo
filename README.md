@@ -25,16 +25,33 @@ aero ingest v1 data/aero_ceo.sqlite                  # import the v1 corpus (rea
 aero ingest official --limit 40                      # and/or collect fresh evidence
 aero ingest news --limit 200
 aero search "Which partner could help Airbus in Spain for SIRTAP?"
-pytest                                               # 91 tests, no network, no GPU
+pytest                                               # 122 tests, no network, no GPU
 ```
 
-## Use the evidence server from an MCP host
+## MCP servers
+
+| Server | Tools | Also |
+|---|---|---|
+| `evidence` | `search_evidence`, `get_chunk`, `get_document`, `find_related`, `list_sources`, `list_topics`, `evidence_stats` | resources `evidence://chunk/{id}`, `evidence://document/{id}` |
+| `signals` | `list_signals`, `get_signal`, `signal_timeseries`, `top_movers` | every signal quotes its sentence |
+| `strategy` | `list_recommendations`, `get_recommendation`, `business_unit_profile`, `risk_checklist` (+ `propose_recommendation`, `update_recommendation_status` with `AERO_STRATEGY_ALLOW_WRITES=true`) | 7 drill-down **prompts** |
+| `partners` | `search_partners`, `get_partner_profile`, `match_partners`, `partner_mentions` | |
+| `all` | every tool above on one server | for local use and the orchestrator |
+
+```bash
+aero signals extract                 # rule:v1-strict signals with quoted evidence
+aero seed recommendations            # v1 blueprints as drafts + auto-linked candidate evidence
+aero rec list && aero rec show 1     # human review; approval needs 2+ independent publishers:
+aero rec approve 1 --reviewer "Keyur" --reason "evidence checked"
+```
+
+## Use the servers from an MCP host
 
 stdio (Claude Desktop, MCP Inspector):
 
 ```json
-{ "mcpServers": { "aero-evidence": {
-    "command": "/abs/path/.venv/bin/aero", "args": ["serve", "evidence", "--stdio"],
+{ "mcpServers": { "aero": {
+    "command": "/abs/path/.venv/bin/aero", "args": ["serve", "all", "--stdio"],
     "cwd": "/abs/path/aero-ceo" } } }
 ```
 
@@ -42,8 +59,6 @@ HTTP (stateless Streamable HTTP, protocol 2026-07-28): `aero serve evidence` ser
 on `AERO_MCP_HOST:AERO_MCP_PORT`. Set `AERO_MCP_ALLOWED_HOSTS` and `AERO_MCP_BEARER_TOKEN` when the
 server is reachable from outside localhost.
 
-Tools: `search_evidence` · `get_chunk` · `get_document` · `find_related` · `list_sources` · `list_topics` ·
-`evidence_stats`. Resources: `evidence://chunk/{id}`, `evidence://document/{id}`, `evidence://taxonomy`.
 
 ## Full stack (Postgres + pgvector + TEI)
 

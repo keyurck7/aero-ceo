@@ -157,3 +157,119 @@ class StoreStats(BaseModel):
     embedded_chunks: int
     embedding_models: list[str]
     latest_collected_at: datetime | None
+
+
+# ----------------------------------------------------------------------------- signals (migration 0002)
+
+SignalType = Literal["opportunity", "risk", "trend"]
+
+
+class SignalIn(BaseModel):
+    """A strategic signal grounded in one exact passage (fixes finding B5's ungrounded rule hits)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: int
+    chunk_id: int
+    signal_type: SignalType
+    title: str
+    description: str
+    topic: str
+    business_unit: str | None = None
+    evidence_quote: str = Field(min_length=1)
+    quote_start: int = Field(ge=0, description="Character offset in the document's clean_text")
+    quote_end: int = Field(gt=0)
+    impact: float = Field(ge=0.0, le=1.0, description="Topic-level prior, not a measurement")
+    confidence: float = Field(ge=0.0, le=1.0, description="Extractor's confidence in the match")
+    extractor: str
+
+
+class Signal(SignalIn):
+    id: int
+    extracted_at: datetime
+    document_title: str
+    url: str
+    publisher: str
+    source_type: SourceType
+    credibility_prior: float
+    published_at: datetime | None
+
+
+class SignalFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    signal_types: list[SignalType] | None = None
+    topics: list[str] | None = None
+    business_units: list[str] | None = None
+    extractor: str | None = None
+    published_after: datetime | None = None
+    published_before: datetime | None = None
+    min_impact: float = Field(0.0, ge=0.0, le=1.0)
+
+    @field_validator("published_after", "published_before")
+    @classmethod
+    def _signal_dates_aware(cls, v: datetime | None) -> datetime | None:
+        return _require_aware(v)
+
+
+# ----------------------------------------------------------------------------- recommendations (migration 0002)
+
+RecommendationStatus = Literal["draft", "approved", "retired"]
+EvidenceRelation = Literal["supports", "contradicts", "candidate"]
+Priority = Literal["High", "Medium", "Low"]
+
+# draft -> approved | retired; approved -> retired. Retired is terminal; a change means a new version.
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {"draft": {"approved", "retired"}, "approved": {"retired"}, "retired": set()}
+
+
+class RecommendationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z0-9_]+$")
+    version: int = Field(1, ge=1)
+    status: RecommendationStatus = "draft"
+    title: str = Field(min_length=5)
+    business_unit: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    priority: Priority = "Medium"
+    recommendation: str = Field(min_length=10)
+    expected_impact: str = ""
+    risk_assessment: str = ""
+    signal_titles: list[str] = Field(default_factory=list)
+    created_by: str = Field(min_length=1, description="e.g. 'seed:v1', 'agent:<run id>', 'user:<name>'")
+
+
+class Recommendation(RecommendationIn):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    status_reason: str | None = None
+
+
+class EvidenceLinkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: int
+    relation: EvidenceRelation = "candidate"
+    score: float | None = None
+    linked_by: str = Field(min_length=1, description="e.g. 'auto:retrieval', 'agent:<run>', 'user:<name>'")
+    note: str | None = None
+
+
+class RecommendationEvidence(BaseModel):
+    evidence: EvidenceChunk
+    relation: EvidenceRelation
+    score: float | None
+    linked_by: str
+    note: str | None
+
+
+class RecommendationReview(BaseModel):
+    recommendation_id: int
+    from_status: RecommendationStatus
+    to_status: RecommendationStatus
+    reviewer: str
+    reason: str
+    created_at: datetime

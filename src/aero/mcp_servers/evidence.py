@@ -80,6 +80,11 @@ def build_evidence_server(store: Store, retriever: HybridRetriever, taxonomy: Ta
     mcp: MCPServer = MCPServer(
         name="aero-evidence", title="AERO-CEO Evidence", version=__version__, instructions=INSTRUCTIONS,
     )
+    register_evidence_tools(mcp, store, retriever, taxonomy)
+    return mcp
+
+
+def register_evidence_tools(mcp: MCPServer, store: Store, retriever: HybridRetriever, taxonomy: Taxonomy) -> None:
     valid_topics = [*taxonomy.topic_names(), DEFAULT_TOPIC]
 
     def _check_topics(topics: list[str] | None) -> None:
@@ -195,4 +200,3 @@ def build_evidence_server(store: Store, retriever: HybridRetriever, taxonomy: Ta
     def taxonomy_resource() -> str:
         return json.dumps({"version": taxonomy.version, "topics": valid_topics})
 
-    return mcp
