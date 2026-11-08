@@ -9,13 +9,41 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 SourceType = Literal["official", "news", "policy", "competitor", "community", "aggregator", "unknown"]
 
 # How much of the publisher's content we hold. Retrieval and the verifier treat a
 # headline+summary differently from a full article.
 ContentLevel = Literal["full_text", "headline_summary", "page"]
+
+# ----------------------------------------------------------------------------- source grading (ADR 0008)
+# NATO Admiralty code: source reliability A-F, assessed separately from the information itself.
+SourceReliability = Literal["A", "B", "C", "D", "E", "F"]
+RELIABILITY_GRADES: tuple[SourceReliability, ...] = ("A", "B", "C", "D", "E", "F")
+RELIABILITY_LABELS: dict[str, str] = {
+    "A": "Completely reliable", "B": "Usually reliable", "C": "Fairly reliable",
+    "D": "Not usually reliable", "E": "Unreliable", "F": "Reliability cannot be judged",
+}
+# The analyst assigns a category (a checkable fact about the publisher); this table is the policy that turns it
+# into a grade. Changing it is a reviewed code change, not a tuning knob.
+SourceCategory = Literal["official_primary", "established_newsroom", "specialist_or_commentary",
+                         "aggregator_or_ugc", "off_topic_or_spam", "unreviewed"]
+CATEGORY_RELIABILITY: dict[str, SourceReliability] = {
+    "official_primary": "A",          # an organisation's own channel, about its own decisions
+    "established_newsroom": "B",      # named editors and a corrections policy
+    "specialist_or_commentary": "C",  # smaller trade titles, analyst blogs, commentary
+    "aggregator_or_ugc": "D",         # press-release redistribution, finance communities, social posts
+    "off_topic_or_spam": "E",         # spam or off-topic content observed in this corpus
+    "unreviewed": "F",                # default until an analyst assigns a category
+}
+# Admiralty information credibility 1-6. The system only assigns 1, 5 and 6 (from corroboration facts);
+# 2-4 need an analyst's judgement of logic and consistency.
+InformationCredibility = Literal[1, 2, 3, 4, 5, 6]
+CREDIBILITY_LABELS: dict[int, str] = {
+    1: "Confirmed by other sources", 2: "Probably true", 3: "Possibly true", 4: "Doubtful", 5: "Improbable",
+    6: "Truth cannot be judged",
+}
 
 
 def _require_aware(v: datetime | None) -> datetime | None:
@@ -30,11 +58,19 @@ class SourceIn(BaseModel):
     name: str = Field(min_length=1)
     source_type: SourceType = "unknown"
     base_url: str | None = None
-    credibility_prior: float = Field(0.5, ge=0.0, le=1.0)
+    category: SourceCategory = "unreviewed"
+    reliability_note: str = ""
     # Syndicated copies of one story count once for "independent sources".
     publisher_group: str | None = None
     # What we may store: e.g. "full_text_permitted", "headline_link_only", "unknown".
     licence: str = "unknown"
+
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def reliability(self) -> SourceReliability:
+        """Admiralty grade, derived from the category by policy (never set directly)."""
+        return CATEGORY_RELIABILITY[self.category]
 
 
 class Source(SourceIn):
@@ -79,6 +115,7 @@ class DocumentIn(BaseModel):
 class Document(DocumentIn):
     id: int
     collected_at: datetime
+    topics_tagger: str = Field("keyword:v1", description="keyword:v1 (provisional) or the LLM prompt that set topics")
 
 
 class EvidenceChunk(BaseModel):
@@ -97,7 +134,7 @@ class EvidenceChunk(BaseModel):
     publisher_group: str | None = None
     source_type: SourceType
     licence: str
-    credibility_prior: float
+    source_reliability: SourceReliability
     published_at: datetime | None
     collected_at: datetime
     topics: list[str]
@@ -114,7 +151,11 @@ class SearchFilters(BaseModel):
     source_types: list[SourceType] | None = None
     published_after: datetime | None = None
     published_before: datetime | None = None
-    min_credibility: float = Field(0.0, ge=0.0, le=1.0)
+    # Allowed Admiralty source grades. None = the server's default policy (everything except E).
+    source_reliability: list[SourceReliability] | None = None
+    # Documents with prompt-injection flags are excluded unless explicitly requested (ADR 0008: quarantine,
+    # never down-weight).
+    include_quarantined: bool = False
     # Reproducibility: only evidence collected on or before this instant.
     as_of: datetime | None = None
     exclude_document_ids: list[int] | None = None
@@ -126,15 +167,15 @@ class SearchFilters(BaseModel):
 
 
 class ScoreBreakdown(BaseModel):
+    """Relevance only. Trust is a filter and a displayed grade, never a term in this score (ADR 0008)."""
+
     dense: float | None = None
     dense_rank: int | None = None
     lexical: float | None = None
     lexical_rank: int | None = None
     rrf: float
     rerank: float | None = None
-    credibility: float
-    recency: float
-    final: float
+    final: float = Field(description="The value the hits are ordered by: rerank score if reranking ran, else RRF")
 
 
 class EvidenceHit(EvidenceChunk):
@@ -162,26 +203,52 @@ class StoreStats(BaseModel):
 # ----------------------------------------------------------------------------- signals (migration 0002)
 
 SignalType = Literal["opportunity", "risk", "trend"]
+# How the reported development bears on Airbus. Reading this is what keyword rules could not do (ADR 0008, H7).
+Direction = Literal["positive", "negative", "mixed", "neutral"]
+EventStatus = Literal["announced", "planned", "proposed", "under_negotiation", "awarded", "in_progress",
+                      "completed", "delayed", "cancelled", "failed", "speculative", "commentary"]
+# Ordinal judged against the written rubric in seeds/materiality_rubric.yaml; never a float.
+Materiality = Literal["high", "medium", "low"]
+MATERIALITY_ORDER: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
+# Coherence policy: an opportunity cannot be bad news for Airbus, a risk cannot be good news.
+ALLOWED_DIRECTIONS: dict[str, set[str]] = {
+    "opportunity": {"positive", "mixed"},
+    "risk": {"negative", "mixed"},
+    "trend": {"positive", "negative", "mixed", "neutral"},
+}
+
+
+class CorroborationItem(BaseModel):
+    chunk_id: int
+    publisher_group: str
+    verdict: Literal["supported", "contradicted"]
 
 
 class SignalIn(BaseModel):
-    """A strategic signal grounded in one exact passage (fixes finding B5's ungrounded rule hits)."""
+    """A strategic signal: an LLM judgement grounded in an exact quote, verified, and agreed across samples."""
 
     model_config = ConfigDict(extra="forbid")
 
     document_id: int
     chunk_id: int
     signal_type: SignalType
-    title: str
-    description: str
+    title: str = Field(min_length=3, max_length=160)
+    description: str = Field(min_length=3, description="The claim, in one sentence, that the quote must support")
     topic: str
     business_unit: str | None = None
+    direction: Direction
+    event_status: EventStatus
+    materiality: Materiality
+    materiality_rationale: str = ""
     evidence_quote: str = Field(min_length=1)
     quote_start: int = Field(ge=0, description="Character offset in the document's clean_text")
     quote_end: int = Field(gt=0)
-    impact: float = Field(ge=0.0, le=1.0, description="Topic-level prior, not a measurement")
-    confidence: float = Field(ge=0.0, le=1.0, description="Extractor's confidence in the match")
-    extractor: str
+    verification_note: str = Field("", description="The verifier's reason for 'supported'")
+    samples_agreeing: int = Field(ge=1, description="Self-consistency: samples that produced this signal")
+    samples_total: int = Field(ge=1)
+    disputed_fields: list[str] = Field(default_factory=list, description="Fields on which the samples disagreed")
+    extractor: str = Field(description="prompt_id@version that produced it")
+    model: str
 
 
 class Signal(SignalIn):
@@ -190,9 +257,14 @@ class Signal(SignalIn):
     document_title: str
     url: str
     publisher: str
+    publisher_group: str | None = None
     source_type: SourceType
-    credibility_prior: float
+    source_reliability: SourceReliability
+    content_level: ContentLevel
     published_at: datetime | None
+    information_credibility: InformationCredibility = 6
+    corroboration: list[CorroborationItem] = Field(default_factory=list)
+    corroborated_at: datetime | None = None
 
 
 class SignalFilters(BaseModel):
@@ -201,10 +273,12 @@ class SignalFilters(BaseModel):
     signal_types: list[SignalType] | None = None
     topics: list[str] | None = None
     business_units: list[str] | None = None
+    directions: list[Direction] | None = None
+    materiality: list[Materiality] | None = None
+    information_credibility: list[InformationCredibility] | None = None
     extractor: str | None = None
     published_after: datetime | None = None
     published_before: datetime | None = None
-    min_impact: float = Field(0.0, ge=0.0, le=1.0)
 
     @field_validator("published_after", "published_before")
     @classmethod

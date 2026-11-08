@@ -12,10 +12,12 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from aero.domain import RELIABILITY_GRADES, SourceReliability
 
 ENV_PREFIX = "AERO_"
 
@@ -49,13 +51,29 @@ class Settings(BaseModel):
     retrieval_mode: Literal["hybrid", "dense", "lexical"] = "hybrid"
     retrieval_candidate_k: int = Field(50, ge=5, le=500)
     retrieval_rrf_k: int = Field(60, ge=1)
-    # Defaults set by the 2026-11-08 ablation (docs/v2-progress.md): ranking on relevance alone beat the
-    # credibility/recency blend (nDCG@10 0.509 vs 0.493, MRR 0.917 vs 0.850). Trust is handled by a floor
-    # (drops content-farm publishers) and reported per hit for the agent's coverage check, not mixed into rank.
-    retrieval_credibility_weight: float = Field(0.0, ge=0.0, le=0.5)
-    retrieval_recency_weight: float = Field(0.0, ge=0.0, le=0.5)
-    retrieval_min_credibility: float = Field(0.15, ge=0.0, le=1.0)
-    recency_half_life_days: float = Field(180.0, gt=0)
+    # Ranking is relevance only (ADR 0008). Admiralty grades listed here are excluded unless a caller asks for
+    # them explicitly (comma-separated, e.g. "E" or "D,E").
+    retrieval_exclude_reliability: str = "E"
+
+    # --- LLM (vLLM OpenAI-compatible endpoint; ADR 0006 / 0008) ------------------------
+    llm_base_url: str | None = None  # e.g. http://localhost:8000/v1
+    llm_model: str = "Qwen/Qwen3.6-27B"
+    llm_api_key: str = ""  # vLLM --api-key, if set
+    llm_timeout_seconds: float = Field(180.0, gt=0)
+    llm_max_retries: int = Field(2, ge=0, le=10)
+    llm_max_concurrency: int = Field(8, ge=1, le=256)
+    # Qwen3 "thinking" adds latency and is not needed for schema-constrained extraction.
+    llm_enable_thinking: bool = False
+    # A different checkpoint for verification/judging, when one is served. Empty = same as llm_model.
+    judge_model: str = ""
+    # off | record (call + save) | replay (cassette only, fail on miss) | record_missing (replay, call on miss)
+    llm_cassette_mode: Literal["off", "record", "replay", "record_missing"] = "off"
+    llm_cassette_dir: Path = Path("evals/cassettes")
+    # Self-consistency samples per document and their sampling temperature (Qwen's recommended non-thinking
+    # setting). Cost knobs, validated by the extraction eval, not judgement weights.
+    signal_samples: int = Field(3, ge=1, le=9)
+    signal_sample_temperature: float = Field(0.7, ge=0.0, le=2.0)
+    corroboration_depth: int = Field(5, ge=1, le=50)
 
     # --- chunking ------------------------------------------------------------------
     chunk_max_words: int = Field(300, ge=50, le=2000)
@@ -83,6 +101,18 @@ class Settings(BaseModel):
     strategy_allow_writes: bool = False
 
     @property
+    def retrieval_excluded_grades(self) -> tuple[SourceReliability, ...]:
+        grades = tuple(g.strip().upper() for g in self.retrieval_exclude_reliability.split(",") if g.strip())
+        bad = [g for g in grades if g not in RELIABILITY_GRADES]
+        if bad:
+            raise ValueError(f"AERO_RETRIEVAL_EXCLUDE_RELIABILITY has unknown grades {bad}; use A-F")
+        return cast(tuple[SourceReliability, ...], grades)
+
+    @property
+    def judge_model_name(self) -> str:
+        return self.judge_model or self.llm_model
+
+    @property
     def mcp_allowed_host_list(self) -> list[str]:
         return [h.strip() for h in self.mcp_allowed_hosts.split(",") if h.strip()]
 
@@ -95,6 +125,7 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def _cross_checks(self) -> Settings:
+        _ = self.retrieval_excluded_grades  # validate early
         if self.chunk_overlap_words >= self.chunk_max_words:
             raise ValueError("AERO_CHUNK_OVERLAP_WORDS must be smaller than AERO_CHUNK_MAX_WORDS")
         if self.embedding_backend == "tei" and not self.tei_embed_url:
@@ -120,6 +151,16 @@ class Settings(BaseModel):
         return Path(self.database_url.removeprefix("sqlite:///"))
 
 
+# Settings deleted by ADR 0008 (no heuristic weights). Named here so a stale .env fails with an explanation.
+REMOVED_SETTINGS = {
+    "retrieval_credibility_weight": "ranking is relevance-only; trust is the Admiralty grade filter "
+                                    "(AERO_RETRIEVAL_EXCLUDE_RELIABILITY), see docs/adr/0008",
+    "retrieval_recency_weight": "recency is a date filter (published_after), not a weight; see docs/adr/0008",
+    "retrieval_min_credibility": "use AERO_RETRIEVAL_EXCLUDE_RELIABILITY (Admiralty grades); see docs/adr/0008",
+    "recency_half_life_days": "recency weighting was removed; see docs/adr/0008",
+}
+
+
 def _env_overrides(environ: dict[str, str]) -> dict[str, Any]:
     fields = Settings.model_fields
     out: dict[str, Any] = {}
@@ -127,6 +168,8 @@ def _env_overrides(environ: dict[str, str]) -> dict[str, Any]:
         if not key.startswith(ENV_PREFIX):
             continue
         name = key[len(ENV_PREFIX) :].lower()
+        if name in REMOVED_SETTINGS:
+            raise ValueError(f"{key} was removed: {REMOVED_SETTINGS[name]}")
         if name not in fields:
             raise ValueError(f"Unknown setting {key}; valid names: {sorted(ENV_PREFIX + f.upper() for f in fields)}")
         out[name] = value

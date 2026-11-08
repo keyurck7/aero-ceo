@@ -98,7 +98,7 @@ def test_compose_text_does_not_duplicate_title():
 
 
 def test_query_never_enters_document_text(ingestor):
-    src = SourceIn(name="Reuters", source_type="news", credibility_prior=0.9, publisher_group="reuters")
+    src = SourceIn(name="Reuters", source_type="news", category="established_newsroom", publisher_group="reuters")
     res = ingestor.ingest(RawItem(
         source=src, title="Dassault and Airbus clash over FCAS leadership",
         url="https://reuters.com/a", body="Workshare dispute continues.", content_level="headline_summary",
@@ -141,10 +141,12 @@ def test_collect_official_then_ingest_and_search(ingestor, plan):
     assert "ignore_instructions" in doc.injection_flags
     assert doc.url == "https://www.airbus.com/en/newsroom/press-releases/sirtap-first-flight"  # canonical link
     assert ingestor.embed_pending() > 0 and ingestor.embed_pending() == 0  # incremental
-    res = HybridRetriever(ingestor.store, ingestor.embedder).search(
-        "SIRTAP maiden flight Rota", top_k=2, filters=SearchFilters(topics=["Uncrewed Combat Aircraft"])
-    )
-    assert res.hits and res.hits[0].document_id == doc.id
+    retriever = HybridRetriever(ingestor.store, ingestor.embedder)
+    topic = ["Uncrewed Combat Aircraft"]
+    assert not retriever.search("SIRTAP maiden flight Rota", top_k=2, filters=SearchFilters(topics=topic)).hits
+    res = retriever.search("SIRTAP maiden flight Rota", top_k=2,
+                           filters=SearchFilters(topics=topic, include_quarantined=True))
+    assert res.hits and res.hits[0].document_id == doc.id  # quarantined, still auditable
 
 
 def test_collect_news_respects_licence_policy(plan):
@@ -161,8 +163,11 @@ def test_collect_news_respects_licence_policy(plan):
     assert [i.content_level for i in research] == ["headline_summary", "full_text"]
     assert research[0].ingestion_context["unresolved_aggregator_link"] is True
     assert research[1].url == "https://www.defensenews.com/sirtap"  # resolved past the aggregator
-    assert research[1].source.name == "Defense News" and research[1].source.credibility_prior > 0.8
-    assert plan.prior_for("Mshale") == 0.05 and plan.prior_for("MSHALE") == 0.05  # spam override wins
+    assert research[1].source.name == "Defense News" and research[1].source.reliability == "B"
+    assert plan.grading_for("MSHALE").category == "off_topic_or_spam"  # exact name, case-insensitive
+    assert plan.news_source("Mshale").reliability == "E"
+    assert plan.news_source("Some New Outlet").reliability == "F"  # never guessed from a substring
+    assert plan.news_source("Airbus Official Web").publisher_group == "airbus"  # counted once with "Airbus"
     assert all(i.ingestion_context["query"] == q for i in research)
 
     plan.full_text_policy = "respect_licence"

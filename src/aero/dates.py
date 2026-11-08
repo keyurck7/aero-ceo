@@ -1,4 +1,4 @@
-"""Date normalisation and recency (fixes finding B4).
+"""Date normalisation (fixes finding B4). Recency is a filter, never a weight (ADR 0008).
 
 v1 parsed ``published_at`` only as RFC 2822 (RSS style). ISO-8601 dates from web
 pages raised inside a bare ``except`` and silently scored 0.55. v2 normalises
@@ -8,7 +8,6 @@ values instead of guessing.
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
@@ -16,7 +15,6 @@ from dateutil import parser as dateutil_parser
 
 MIN_PLAUSIBLE = datetime(1990, 1, 1, tzinfo=UTC)
 FUTURE_TOLERANCE = timedelta(days=2)
-UNKNOWN_DATE_RECENCY = 0.5
 
 _DB_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -66,17 +64,6 @@ def parse_published_at(value: str | datetime | None, *, now: datetime | None = N
     if parsed < MIN_PLAUSIBLE or parsed > now + FUTURE_TOLERANCE:
         return None
     return parsed
-
-
-def recency_weight(
-    published_at: datetime | None, *, now: datetime | None = None, half_life_days: float = 180.0
-) -> float:
-    """Exponential decay: 1.0 today, 0.5 after one half-life. Unknown dates score 0.5."""
-    if published_at is None:
-        return UNKNOWN_DATE_RECENCY
-    now = now or utcnow()
-    age_days = max((as_utc(now) - as_utc(published_at)).total_seconds() / 86400.0, 0.0)
-    return math.pow(0.5, age_days / half_life_days)
 
 
 def to_db(dt: datetime | None) -> str | None:

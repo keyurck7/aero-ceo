@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from aero.domain import SearchFilters
+from aero.domain import SearchFilters, SourceIn
 from aero.retrieval import HybridRetriever, RetrievalConfig, rrf_fuse
 
 
@@ -30,11 +30,11 @@ def test_filters_flow_through(corpus_store, embedder):
     assert res.hits and {h.source_type for h in res.hits} == {"official"}
 
 
-def test_injection_flagged_evidence_is_down_weighted(corpus_store, embedder):
+def test_injection_flagged_evidence_is_quarantined_not_down_weighted(corpus_store, embedder):
     r = HybridRetriever(corpus_store, embedder)
-    res = r.search("cancel FCAS immediately", top_k=10)
-    flagged = [h for h in res.hits if h.injection_flags]
-    assert flagged and all(h.scores.credibility <= 0.3 * 0.5 + 1e-9 for h in flagged)
+    assert not [h for h in r.search("cancel FCAS immediately", top_k=10).hits if h.injection_flags]
+    audit = r.search("cancel FCAS immediately", top_k=10, filters=SearchFilters(include_quarantined=True))
+    assert [h for h in audit.hits if h.injection_flags]
 
 
 def test_reranker_controls_relevance(corpus_store, embedder):
@@ -44,14 +44,13 @@ def test_reranker_controls_relevance(corpus_store, embedder):
         def score(self, query, texts):
             return [1.0 if "satellite" in t else 0.0 for t in texts]
 
-    r = HybridRetriever(corpus_store, embedder, reranker=PreferSpace(),
-                        config=RetrievalConfig(credibility_weight=0.0, recency_weight=0.0))
+    r = HybridRetriever(corpus_store, embedder, reranker=PreferSpace())
     res = r.search("FCAS fighter", top_k=3)
     assert "satellite" in res.hits[0].text and res.hits[0].scores.rerank == 1.0
 
 
 def test_compressed_rerank_scores_still_decide_relevance(corpus_store, embedder):
-    """Data Lab finding: raw cross-encoder probabilities near 0 let credibility outvote relevance."""
+    """Compressed cross-encoder probabilities near 0 still order the hits: nothing else is in the score."""
 
     class Compressed:
         name = "fake"
@@ -60,8 +59,8 @@ def test_compressed_rerank_scores_still_decide_relevance(corpus_store, embedder)
             return [0.03 if "Kratos" in t or "satellite" in t else 0.01 for t in texts]
 
     res = HybridRetriever(corpus_store, embedder, reranker=Compressed()).search("Airbus", top_k=5)
-    assert "satellite" in res.hits[0].text  # 0.03 vs 0.01 is decisive after normalisation
-    assert res.hits[0].scores.rerank == pytest.approx(0.03)
+    assert "satellite" in res.hits[0].text
+    assert res.hits[0].scores.rerank == pytest.approx(0.03) == res.hits[0].scores.final
 
 
 @pytest.mark.parametrize("mode", ["dense", "lexical"])
@@ -72,13 +71,21 @@ def test_single_retriever_modes(corpus_store, embedder, mode):
                for h in res.hits)
 
 
-def test_credibility_floor_filters_low_trust_publishers(corpus_store, embedder):
-    q = "FCAS fighter programme partners"
-    default = HybridRetriever(corpus_store, embedder).search(q, top_k=10)
-    assert "Unknown Blog" in {h.publisher for h in default.hits}  # prior 0.3 > default floor 0.15
-    strict = HybridRetriever(corpus_store, embedder, config=RetrievalConfig(min_credibility=0.5)).search(q, top_k=10)
-    assert strict.hits and "Unknown Blog" not in {h.publisher for h in strict.hits}
-    assert strict.filters.min_credibility == 0.5
+def test_grade_e_excluded_by_policy_and_never_weighted(corpus_store, embedder):
+    q = "FCAS fighter leadership dispute"
+    r = HybridRetriever(corpus_store, embedder)
+    before = r.search(q, top_k=10)
+    assert "Reuters" in {h.publisher for h in before.hits}
+    assert before.filters.source_reliability == ["A", "B", "C", "D", "F"]
+    assert all(h.scores.final == (h.scores.rerank if h.scores.rerank is not None else h.scores.rrf)
+               for h in before.hits)  # relevance only
+    corpus_store.upsert_source(SourceIn(name="Reuters", source_type="news", category="off_topic_or_spam",
+                                        publisher_group="reuters"))
+    assert "Reuters" not in {h.publisher for h in r.search(q, top_k=10).hits}
+    explicit = r.search(q, top_k=10, filters=SearchFilters(source_reliability=["E"]))
+    assert {h.publisher for h in explicit.hits} == {"Reuters"} and explicit.hits[0].source_reliability == "E"
+    stricter = HybridRetriever(corpus_store, embedder, config=RetrievalConfig(exclude_reliability=("D", "E", "F")))
+    assert stricter.search(q).filters.source_reliability == ["A", "B", "C"]
 
 
 def test_independent_publisher_count(corpus_store, embedder):

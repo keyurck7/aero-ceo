@@ -22,6 +22,7 @@ import numpy as np
 from aero.domain import (
     ALLOWED_TRANSITIONS,
     ChunkIn,
+    CorroborationItem,
     Document,
     DocumentIn,
     EvidenceChunk,
@@ -77,6 +78,28 @@ def lexical_terms(query: str, max_terms: int = 24) -> list[str]:
 
 def is_near_duplicate(a: int, b: int) -> bool:
     return hamming64(a, b) <= NEAR_DUPLICATE_MAX_HAMMING
+
+
+# ---- signal SQL shared by both adapters (ADR 0008: no impact/confidence floats) -----------------
+SIGNAL_COLUMNS: tuple[str, ...] = (
+    "document_id", "chunk_id", "signal_type", "title", "description", "topic", "business_unit", "direction",
+    "event_status", "materiality", "materiality_rationale", "evidence_quote", "quote_start", "quote_end",
+    "verification_note", "samples_agreeing", "samples_total", "disputed_fields", "extractor", "model",
+)
+SIGNAL_ORDER = (
+    "CASE g.materiality WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, "
+    "d.published_at DESC NULLS LAST, g.id"
+)
+
+
+def signal_filter_columns(filters: SignalFilters) -> list[tuple[str, list[Any]]]:
+    """(column, allowed values) pairs for the IN-list filters that are set."""
+    pairs: list[tuple[str, Sequence[Any] | None]] = [
+        ("g.signal_type", filters.signal_types), ("g.topic", filters.topics),
+        ("g.business_unit", filters.business_units), ("g.direction", filters.directions),
+        ("g.materiality", filters.materiality), ("g.information_credibility", filters.information_credibility),
+    ]
+    return [(col, list(vals)) for col, vals in pairs if vals]
 
 
 class DuplicateDocumentError(Exception):
@@ -180,12 +203,21 @@ class Store(ABC):
 
     # ---- signals (migration 0002) ----------------------------------------------------
     @abstractmethod
+    def set_document_topics(self, document_id: int, topics: Sequence[str], tagger: str) -> None:
+        """Replace a document's topic labels and record who assigned them (e.g. the LLM prompt ref)."""
+
+    @abstractmethod
     def replace_signals(self, document_id: int, extractor: str, signals: Sequence[SignalIn]) -> int:
         """Atomically replace one extractor's signals for one document (idempotent re-extraction)."""
 
     @abstractmethod
     def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
-        """Highest impact first, then confidence, then most recent."""
+        """Ordered by materiality (high first), then most recent, then id."""
+
+    @abstractmethod
+    def set_signal_corroboration(self, signal_id: int, items: Sequence[CorroborationItem],
+                                 information_credibility: int) -> None:
+        """Record the corroboration facts and the Admiralty information credibility they imply."""
 
     @abstractmethod
     def get_signal(self, signal_id: int) -> Signal | None: ...

@@ -11,14 +11,16 @@ from pydantic import BaseModel, Field
 
 from aero import __version__
 from aero.domain import EvidenceChunk
-from aero.intelligence.partners import Partner, PartnerMatch, PartnerRegistry
+from aero.intelligence.partners import Partner, PartnerRanker, PartnerRanking, PartnerRegistry
+from aero.llm import LLM, LLMError
 from aero.storage import Store
 
 INSTRUCTIONS = """\
 AERO-CEO partners server: an analyst-maintained registry of potential European partners (capabilities, collaboration
 areas, known risks) and the evidence passages that mention them. match_partners ranks candidates for a capability
-need; partner_mentions shows what the evidence actually says. The registry is curated data, not evidence; cite
-partner_mentions chunks for factual claims."""
+need: a required country filters, each partner gets a cited rubric assessment, every pair is judged in both orders
+and a Bradley-Terry model orders them. Report rank, win/loss record and cited evidence; there is no score to quote.
+The registry is curated data, not evidence; cite evidence chunks for factual claims."""
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, idempotent_hint=True, destructive_hint=False, open_world_hint=False)
 
@@ -33,24 +35,20 @@ class PartnerProfile(BaseModel):
     recent_mentions: list[EvidenceChunk]
 
 
-class MatchResult(BaseModel):
-    need: str
-    country: str | None
-    matches: list[PartnerMatch]
-
-
 class Mentions(BaseModel):
     partner: str
     mentions: list[EvidenceChunk]
 
 
-def build_partners_server(store: Store, registry: PartnerRegistry) -> MCPServer:
+def build_partners_server(store: Store, registry: PartnerRegistry, llm: LLM) -> MCPServer:
     mcp = MCPServer(name="aero-partners", title="AERO-CEO Partners", version=__version__, instructions=INSTRUCTIONS)
-    register_partner_tools(mcp, store, registry)
+    register_partner_tools(mcp, store, registry, llm)
     return mcp
 
 
-def register_partner_tools(mcp: MCPServer, store: Store, registry: PartnerRegistry) -> None:
+def register_partner_tools(mcp: MCPServer, store: Store, registry: PartnerRegistry, llm: LLM) -> None:
+    ranker = PartnerRanker(llm, registry, store)
+
     def _get(name: str) -> Partner:
         partner = registry.get(name)
         if partner is None:
@@ -71,13 +69,21 @@ def register_partner_tools(mcp: MCPServer, store: Store, registry: PartnerRegist
         return PartnerProfile(partner=partner, recent_mentions=registry.mentions(store, partner.name, limit=mentions))
 
     @mcp.tool(annotations=READ_ONLY)
-    def match_partners(need: Annotated[str, Field(min_length=3)], country: str | None = None,
-                       limit: Annotated[int, Field(ge=1, le=10)] = 5) -> MatchResult:
-        """Rank partners for a capability need (e.g. 'mission systems for uncrewed aircraft', country 'Spain').
+    def match_partners(
+        need: Annotated[str, Field(min_length=3, description="e.g. 'mission systems for uncrewed aircraft'")],
+        required_country: Annotated[str | None, Field(description="Hard constraint: other countries are excluded")]
+        = None,
+        preferences: Annotated[str, Field(description="Soft preferences, given to the judges as text")] = "",
+        limit: Annotated[int, Field(ge=1, le=10)] = 5,
+    ) -> PartnerRanking:
+        """Rank partners for a capability need from cited assessments and pairwise judgements (Bradley-Terry).
 
-        Score = 0.6 capability overlap + 0.2 country match + 0.2 evidence mentions; the rationale explains each.
+        Slow-ish (one model call per partner plus two per pair, run in parallel). Needs the served LLM.
         """
-        return MatchResult(need=need, country=country, matches=registry.match(store, need, country, limit))
+        try:
+            return ranker.rank(need, required_country=required_country, preferences=preferences, limit=limit)
+        except LLMError as exc:
+            raise ToolError(f"partner ranking needs the LLM: {exc}") from exc
 
     @mcp.tool(annotations=READ_ONLY)
     def partner_mentions(name: str, limit: Annotated[int, Field(ge=1, le=20)] = 8) -> Mentions:

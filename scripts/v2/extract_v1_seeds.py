@@ -93,51 +93,8 @@ def main() -> None:
         },
     })
 
-    registry = literal("app/ingestion/source_registry.py", "SOURCES")
-    trusted = literal("app/ingestion/collectors/rss_intelligence_collector.py", "TRUSTED_SOURCE_KEYWORDS")
-    dump(SEEDS / "sources.yaml", "Sources, publisher credibility priors and collection plan", {
-        "version": VERSION,
-        "licence_review_required": True,
-        # research_mode = store full text for non-commercial research (v1 behaviour);
-        # respect_licence = full text only where licence allows (required before commercial use). ADR 0004.
-        "full_text_policy": "research_mode",
-        "notes": (
-            "licence must be reviewed per source before production use (finding P3). "
-            "'unknown' = store headline + link + short snippet only."
-        ),
-        "sources": [
-            {
-                "name": s["name"],
-                "source_type": s["source_type"],
-                "base_url": s["base_url"],
-                "credibility_prior": s["trust_score"],
-                "publisher_group": slug(s["name"].split()[0]),
-                "licence": "unknown",
-            }
-            for s in registry
-        ],
-        # Feed items name their publisher; these priors are matched case-insensitively.
-        "publisher_priors": {k: v for k, v in trusted.items()},
-        # Exact publisher names (case-insensitive); take precedence over publisher_priors. Analyst-maintained.
-        # Low values: content-farm / SEO-spam items found in the v1 corpus (2026-11-07 review).
-        "publisher_overrides": {
-            "Mshale": 0.05, "Fathom Journal": 0.05, "facebook.com": 0.2, "Moomoo": 0.3, "TradingView": 0.3,
-            "Financial Times": 0.9, "DW.com": 0.85, "Euronews.com": 0.8, "SpaceNews": 0.84, "TWZ": 0.8,
-        },
-        "default_news_prior": 0.65,
-        "collection": {
-            "official_seed_urls": literal("app/ingestion/collectors/airbus_live_collector.py", "OFFICIAL_SEED_URLS"),
-            "official_allowed_hosts": ["airbus.com"],
-            "official_path_tokens": [
-                "defence", "newsroom", "fcas", "eurofighter", "space", "uav", "military", "press-release",
-            ],
-            "news_queries": clean_keywords(
-                literal("app/ingestion/collectors/airbus_live_collector.py", "NEWS_QUERIES")
-                + literal("app/ingestion/collectors/rss_intelligence_collector.py", "AIRBUS_INTELLIGENCE_QUERIES")
-            ),
-            "news_feed_template": "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en",
-        },
-    })
+    # seeds/sources.yaml is no longer generated: since ADR 0008 it holds the analyst's Admiralty source grading,
+    # which has no v1 equivalent (v1 trust_score floats are deliberately not carried over).
 
     partners = literal("app/agents/ceo_chat_agent.py", "PARTNER_CAPABILITY_MAP")
     dump(SEEDS / "partners.yaml", "Partner registry (analyst-maintained; v1 PARTNER_CAPABILITY_MAP)", {

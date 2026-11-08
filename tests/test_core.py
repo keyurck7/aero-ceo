@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
 
 from aero.config import load_settings
-from aero.dates import from_db, parse_published_at, recency_weight, to_db
+from aero.dates import from_db, parse_published_at, to_db
 from aero.embeddings import HashingEmbedder, TEIEmbedder
-from aero.scoring import blend_final, evidence_credibility
 from aero.taxonomy import DEFAULT_TOPIC, infer_topics
 from aero.text import (
     canonical_url,
@@ -66,10 +65,6 @@ class TestDates:
     def test_rejects_garbage_and_implausible(self, raw):
         assert parse_published_at(raw, now=NOW) is None
 
-    def test_recency_half_life(self):
-        assert recency_weight(NOW, now=NOW) == pytest.approx(1.0)
-        assert recency_weight(NOW - timedelta(days=180), now=NOW, half_life_days=180) == pytest.approx(0.5)
-        assert recency_weight(None, now=NOW) == 0.5
 
     def test_db_roundtrip_sorts_lexicographically(self):
         a, b = datetime(2025, 1, 2, tzinfo=UTC), datetime(2025, 11, 1, tzinfo=UTC)
@@ -166,19 +161,6 @@ class TestTaxonomy:
 
     def test_default_topic(self, taxonomy):
         assert infer_topics("quarterly earnings call", taxonomy) == [DEFAULT_TOPIC]
-
-
-# ----------------------------------------------------------------- scoring
-class TestScoring:
-    def test_credibility_factors(self):
-        assert evidence_credibility(0.9, "full_text") == 0.9
-        assert evidence_credibility(0.9, "headline_summary") == pytest.approx(0.72)
-        assert evidence_credibility(0.9, "full_text", ["ignore_instructions"]) == pytest.approx(0.45)
-
-    def test_blend(self):
-        assert blend_final(1.0, 1.0, 1.0, 0.1, 0.05) == pytest.approx(1.0)
-        with pytest.raises(ValueError):
-            blend_final(1, 1, 1, 0.6, 0.5)
 
 
 # ----------------------------------------------------------------- embeddings

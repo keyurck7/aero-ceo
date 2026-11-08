@@ -8,18 +8,21 @@ from mcp.client import Client
 
 from aero.domain import SearchFilters
 from aero.intelligence.partners import PartnerRegistry
-from aero.intelligence.signals import RuleSignalExtractor, load_signal_rules, run_extraction
+from aero.intelligence.signals import LLMSignalExtractor, load_materiality_rubric, run_extraction
 from aero.intelligence.strategy import load_drilldown_prompts, load_risk_checklist
+from aero.intelligence.verification import Verifier
+from aero.llm import LLMUnavailableError
 from aero.mcp_servers.partners import build_partners_server
 from aero.mcp_servers.registry import ServerDeps, build_server
 from aero.mcp_servers.signals import build_signals_server
 from aero.mcp_servers.strategy import build_strategy_server
 from aero.retrieval import HybridRetriever
 from tests.conftest import ROOT
+from tests.fakes import scripted_llm
 
 SEEDS = ROOT / "seeds"
 READ_TOOLS = {"list_recommendations", "get_recommendation", "business_unit_profile", "risk_checklist"}
-WRITE_TOOLS = {"propose_recommendation", "update_recommendation_status"}
+WRITE_TOOLS = {"propose_recommendation", "update_recommendation_status", "review_evidence_link"}
 
 
 def call(server, fn):
@@ -32,7 +35,9 @@ def call(server, fn):
 
 @pytest.fixture
 def signal_store(corpus_store, taxonomy):
-    run_extraction(corpus_store, RuleSignalExtractor(load_signal_rules(SEEDS / "signal_rules_v1.yaml"), taxonomy))
+    llm = scripted_llm()
+    run_extraction(corpus_store, LLMSignalExtractor(llm, Verifier(llm), taxonomy,
+                                                    load_materiality_rubric(SEEDS / "materiality_rubric.yaml")))
     return corpus_store
 
 
@@ -47,7 +52,7 @@ def test_signals_server(signal_store, taxonomy):
 
     async def go(c):
         tools = (await c.list_tools()).tools
-        listed = await c.call_tool("list_signals", {"signal_types": ["risk"], "limit": 5})
+        listed = await c.call_tool("list_signals", {"signal_types": ["risk"], "directions": ["negative"], "limit": 5})
         bad = await c.call_tool("list_signals", {"topics": ["Spaceships"]})
         series = await c.call_tool("signal_timeseries", {"bucket": "quarter"})
         movers = await c.call_tool("top_movers", {"window_days": 365})
@@ -60,6 +65,8 @@ def test_signals_server(signal_store, taxonomy):
     assert all(t.annotations.read_only_hint for t in tools)
     sig = listed.structured_content["signals"][0]
     assert sig["signal_type"] == "risk" and sig["evidence_quote"] and sig["chunk_id"] and sig["url"]
+    assert sig["direction"] == "negative" and sig["samples_total"] == 3 and sig["source_reliability"] == "B"
+    assert "impact" not in sig and "confidence" not in sig
     assert bad.is_error and "Valid topics" in bad.content[0].text
     assert series.structured_content["points"] and "undated_signals" in series.structured_content
     assert movers.structured_content["movers"] and one.structured_content["id"] == sig["id"]
@@ -96,23 +103,31 @@ def test_strategy_write_flow_with_approval_gate(corpus_store, taxonomy):
             "recommendation": "Pursue SIRTAP export with secure satcom bundle.",
             "evidence_chunk_ids": [*sirtap, satcom]})
         rec2 = two_pub.structured_content["recommendation"]["id"]
+        unverified = await c.call_tool("update_recommendation_status", {
+            "recommendation_id": rec2, "status": "approved", "reviewer": "alice", "reason": "two publishers"})
+        for chunk in (sirtap[0], satcom):
+            await c.call_tool("review_evidence_link", {
+                "recommendation_id": rec2, "chunk_id": chunk, "relation": "supports", "reviewer": "alice",
+                "note": "read the passage; it supports the case"})
         ok = await c.call_tool("update_recommendation_status", {
             "recommendation_id": rec2, "status": "approved", "reviewer": "alice", "reason": "two publishers"})
         prompt = await c.get_prompt("what_could_go_wrong", {"recommendation_id": str(rec2)})
         bad_chunk = await c.call_tool("propose_recommendation", {
             "key": "bad_one", "title": "Bad evidence ids", "recommendation": "Nothing supports this one.",
             "evidence_chunk_ids": [999_999], "proposed_by": "agent:test"})
-        return tools, one_pub, blocked, two_pub, ok, prompt, bad_chunk
+        return tools, one_pub, blocked, two_pub, unverified, ok, prompt, bad_chunk
 
-    tools, one_pub, blocked, two_pub, ok, prompt, bad_chunk = call(server, go)
+    tools, one_pub, blocked, two_pub, unverified, ok, prompt, bad_chunk = call(server, go)
     assert set(tools) >= WRITE_TOOLS and tools["propose_recommendation"].annotations.read_only_hint is False
     assert one_pub.structured_content["recommendation"]["status"] == "draft"
     assert one_pub.structured_content["approved_advice"] is False
     assert blocked.is_error and "independent publishers" in blocked.content[0].text
     assert two_pub.structured_content["recommendation"]["version"] == 2
+    assert two_pub.structured_content["candidate_publishers"] == 2
+    assert unverified.is_error and "has 0" in unverified.content[0].text  # candidates do not count
     detail = ok.structured_content
     assert detail["recommendation"]["status"] == "approved" and detail["approved_advice"] is True
-    assert detail["independent_publishers"] == 2 and detail["reviews"][0]["reviewer"] == "alice"
+    assert detail["supporting_publishers"] == 2 and detail["reviews"][0]["reviewer"] == "alice"
     text = prompt.messages[0].content.text
     assert "<evidence id=" in text and "Export SIRTAP" in text
     assert bad_chunk.is_error and "unknown evidence chunk ids" in bad_chunk.content[0].text
@@ -135,18 +150,20 @@ def test_business_unit_profile_tool_errors_helpfully(signal_store, taxonomy):
 
 # ----------------------------------------------------------------- partners
 def test_partners_server(corpus_store):
-    server = build_partners_server(corpus_store, PartnerRegistry.load(SEEDS / "partners.yaml"))
+    server = build_partners_server(corpus_store, PartnerRegistry.load(SEEDS / "partners.yaml"), scripted_llm())
 
     async def go(c):
         tools = (await c.list_tools()).tools
-        match = await c.call_tool("match_partners", {"need": "systems integration sensors", "country": "Spain"})
+        match = await c.call_tool("match_partners", {"need": "systems integration sensors",
+                                                     "required_country": "Spain"})
         profile = await c.call_tool("get_partner_profile", {"name": "indra"})
         unknown = await c.call_tool("partner_mentions", {"name": "Nobody Inc"})
         return tools, match, profile, unknown
 
     tools, match, profile, unknown = call(server, go)
     assert {t.name for t in tools} == {"search_partners", "get_partner_profile", "match_partners", "partner_mentions"}
-    assert match.structured_content["matches"][0]["partner"]["name"] == "Indra"
+    ranked = match.structured_content["ranked"]
+    assert ranked[0]["partner"]["name"] == "Indra" and ranked[0]["wins"] == 1 and "score" not in ranked[0]
     assert profile.structured_content["recent_mentions"][0]["chunk_id"]
     assert unknown.is_error and "Known:" in unknown.content[0].text
 
@@ -163,3 +180,19 @@ def test_combined_server_mounts_every_tool_set(corpus_store, settings, embedder,
     assert {"search_evidence", "list_signals", "get_recommendation", "match_partners"} <= names
     assert not WRITE_TOOLS & names  # writes stay off unless AERO_STRATEGY_ALLOW_WRITES=true
     assert len(names) == 7 + 4 + 4 + 4 and len(prompts) == 7
+
+
+def test_partner_ranking_without_llm_is_an_explicit_error(corpus_store):
+    class Down:
+        model = "none"
+
+        def complete(self, request):
+            raise LLMUnavailableError("no endpoint")
+
+    server = build_partners_server(corpus_store, PartnerRegistry.load(SEEDS / "partners.yaml"), Down())
+
+    async def go(c):
+        return await c.call_tool("match_partners", {"need": "sensors"})
+
+    res = call(server, go)
+    assert res.is_error and "needs the LLM" in res.content[0].text  # no heuristic fallback

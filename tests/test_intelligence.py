@@ -1,18 +1,19 @@
-"""Signals, recommendations and partners: services and store contract (SQLite always, Postgres when configured)."""
+"""Signals, recommendations and partners: services and store contract (SQLite always, Postgres when configured).
+
+The LLM is scripted (tests/fakes.py): these tests cover the guards around the model, not its reading skill.
+"""
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 
-from aero.domain import EvidenceLinkIn, RecommendationIn, SearchFilters, SignalFilters
-from aero.intelligence.partners import PartnerRegistry
+from aero.domain import CorroborationItem, EvidenceLinkIn, RecommendationIn, SearchFilters, SignalFilters
+from aero.intelligence.partners import PartnerRanker, PartnerRegistry
+from aero.intelligence.ranking import Game, bradley_terry, win_probability
 from aero.intelligence.signals import (
-    RuleSignalExtractor,
-    load_signal_rules,
+    LLMSignalExtractor,
+    load_materiality_rubric,
     run_extraction,
-    sentence_span,
     signal_timeseries,
     top_movers,
 )
@@ -25,21 +26,36 @@ from aero.intelligence.strategy import (
     load_risk_checklist,
     propose,
     render_drilldown,
+    review_evidence,
+    supporting_publishers,
+    verify_evidence,
 )
+from aero.intelligence.verification import Verifier, find_quote, information_credibility
 from aero.storage.base import InvalidTransitionError
 from tests.conftest import NOW, ROOT
+from tests.fakes import scripted_llm
 
 SEEDS = ROOT / "seeds"
 
 
-@pytest.fixture(scope="module")
-def extractor(taxonomy):
-    return RuleSignalExtractor(load_signal_rules(SEEDS / "signal_rules_v1.yaml"), taxonomy)
+@pytest.fixture
+def llm():
+    return scripted_llm()
 
 
 @pytest.fixture
-def signal_store(corpus_store, extractor):
-    run_extraction(corpus_store, extractor)
+def extractor(llm, taxonomy):
+    return LLMSignalExtractor(llm, Verifier(llm), taxonomy, load_materiality_rubric(SEEDS / "materiality_rubric.yaml"),
+                              samples=3)
+
+
+@pytest.fixture
+def extraction(corpus_store, extractor):
+    return run_extraction(corpus_store, extractor, max_workers=2)
+
+
+@pytest.fixture
+def signal_store(corpus_store, extraction):
     return corpus_store
 
 
@@ -47,60 +63,87 @@ def _doc_id(store, title_part):
     return next(i for i in store.list_document_ids() if title_part in store.get_document(i).title)
 
 
-# ----------------------------------------------------------------- signal extraction
-def test_sentence_span():
-    text = "First sentence. The SIRTAP drone flew today! Third one"
-    s, e = sentence_span(text, text.index("SIRTAP"))
-    assert text[s:e] == "The SIRTAP drone flew today!"
+# ----------------------------------------------------------------- quote grounding and credibility policy
+def test_find_quote_is_exact_modulo_whitespace_and_typography():
+    text = "Airbus said:  \u201cthe  deal\nis off\u201d. Next."
+    assert find_quote(text, "Next.") == (text.index("Next."), len(text))
+    span = find_quote(text, '"the deal is off"')
+    assert span and text[span[0]:span[1]] == "\u201cthe  deal\nis off\u201d"
+    assert find_quote(text, "the deal is on") is None and find_quote(text, "  ") is None
 
 
-def test_signals_are_grounded_in_exact_quotes(signal_store):
-    signals = signal_store.list_signals(SignalFilters(), limit=500)
-    assert signals
+def test_information_credibility_uses_only_corroboration_facts():
+    sup = CorroborationItem(chunk_id=1, publisher_group="reuters", verdict="supported")
+    con = CorroborationItem(chunk_id=2, publisher_group="ft", verdict="contradicted")
+    assert information_credibility([sup]) == 1
+    assert information_credibility([con]) == 5
+    assert information_credibility([sup, con]) == 6 and information_credibility([]) == 6
+
+
+# ----------------------------------------------------------------- LLM signal extraction and its guards
+def test_extraction_keeps_only_grounded_coherent_majority_verified_signals(extraction, signal_store):
+    reasons = extraction.stats
+    assert reasons["skipped_quarantined"] == 1  # the injection-flagged blog never reaches the model
+    assert reasons["rejected_incoherent_direction"] == 3  # an "opportunity" that is bad news, in all 3 samples
+    assert reasons["rejected_ungrounded_quote"] == 3  # paraphrased quote, in all 3 samples
+    assert reasons["rejected_no_majority"] == 1  # seen in 1 of 3 samples
+    assert reasons["rejected_verification_contradicted"] == 1  # "upgrade cancelled" vs "will receive"
+    signals = signal_store.list_signals(SignalFilters(), limit=100)
+    assert {(s.signal_type, s.topic) for s in signals} == {
+        ("risk", "FCAS"), ("opportunity", "Uncrewed Combat Aircraft"), ("opportunity", "Military Space")}
     for s in signals:
         doc = signal_store.get_document(s.document_id)
-        assert doc.clean_text[s.quote_start : s.quote_end] == s.evidence_quote
-        chunk = signal_store.get_evidence([s.chunk_id])[s.chunk_id]
-        assert s.evidence_quote in chunk.text
-    keys = [(s.document_id, s.title) for s in signals]
-    assert len(keys) == len(set(keys))  # at most one signal per (document, rule)
+        assert doc.clean_text[s.quote_start:s.quote_end] == s.evidence_quote  # citable span
+        assert s.samples_total == 3 and s.samples_agreeing >= 2 and s.extractor == "signal_extract@1"
+        assert s.model == "fake-qwen" and s.verification_note and s.information_credibility == 6
+        assert s.source_reliability in "ABCDEF" and s.content_level == "full_text"
 
 
-def test_risk_rule_fires_on_dispute_text_with_business_unit(signal_store):
-    fcas = _doc_id(signal_store, "clash over FCAS")
-    risks = signal_store.list_signals(SignalFilters(signal_types=["risk"]), limit=100)
-    fcas_risk = [s for s in risks if s.document_id == fcas and "fragmentation" in s.title]
-    assert fcas_risk and fcas_risk[0].business_unit == "Future Combat / FCAS"
-    assert fcas_risk[0].publisher == "Reuters" and fcas_risk[0].topic == "FCAS"
+def test_direction_status_and_disputes_are_recorded(signal_store):
+    (fcas,) = signal_store.list_signals(SignalFilters(topics=["FCAS"]), limit=5)
+    assert (fcas.signal_type, fcas.direction, fcas.event_status) == ("risk", "negative", "speculative")
+    assert fcas.materiality == "high" and fcas.disputed_fields == ["materiality"]  # 2 of 3 samples said high
+    assert fcas.business_unit == "Future Combat / FCAS"  # taxonomy policy table, not the model
 
 
-def test_company_name_does_not_create_space_signals(signal_store):
-    """'Airbus Defence and Space' appears in the FCAS and SIRTAP texts; only the satellite article is about space."""
-    space = signal_store.list_signals(SignalFilters(topics=["Military Space"]), limit=100)
-    assert {s.document_title for s in space} == {"Airbus wins military satellite communications contract"}
+def test_llm_topics_replace_keyword_topics(signal_store):
+    doc = signal_store.get_document(_doc_id(signal_store, "satellite communications"))
+    assert doc.topics == ["Military Space"] and doc.topics_tagger == "signal_extract@1"
 
 
-def test_extraction_is_idempotent(signal_store, extractor):
-    before = len(signal_store.list_signals(SignalFilters(), limit=500))
-    stats = run_extraction(signal_store, extractor)
-    assert stats["signals"] == before == len(signal_store.list_signals(SignalFilters(), limit=500))
+def test_extraction_is_idempotent(corpus_store, extractor):
+    first = run_extraction(corpus_store, extractor, max_workers=1).stats["signals"]
+    second = run_extraction(corpus_store, extractor, max_workers=1).stats["signals"]
+    assert first == second == len(corpus_store.list_signals(SignalFilters(), limit=100))
 
 
-def test_signal_filters_and_lookup(signal_store):
-    uncrewed = signal_store.list_signals(SignalFilters(business_units=["Uncrewed Systems"]), limit=50)
-    assert uncrewed and all(s.business_unit == "Uncrewed Systems" for s in uncrewed)
-    recent = signal_store.list_signals(SignalFilters(published_after=NOW - timedelta(days=30)), limit=50)
-    assert recent and all(s.published_at >= NOW - timedelta(days=30) for s in recent)
-    one = signal_store.get_signal(uncrewed[0].id)
-    assert one == uncrewed[0] and signal_store.get_signal(999_999) is None
-    impacts = [s.impact for s in signal_store.list_signals(SignalFilters(), limit=500)]
-    assert impacts == sorted(impacts, reverse=True)
+def test_signal_filters_and_ordering(signal_store):
+    assert {s.signal_type for s in signal_store.list_signals(SignalFilters(signal_types=["risk"]))} == {"risk"}
+    high = signal_store.list_signals(SignalFilters(materiality=["high"]))
+    assert high and {s.materiality for s in high} == {"high"}
+    assert signal_store.list_signals(SignalFilters(directions=["neutral"])) == []
+    ordered = [s.materiality for s in signal_store.list_signals(SignalFilters(), limit=100)]
+    assert ordered == sorted(ordered, key=["high", "medium", "low"].index)
+    one = signal_store.list_signals(SignalFilters(), limit=1)[0]
+    assert signal_store.get_signal(one.id) == one
 
 
-def test_timeseries_and_movers(signal_store):
+def test_corroboration_sets_admiralty_credibility(signal_store):
+    sig = signal_store.list_signals(SignalFilters(topics=["Military Space"]))[0]
+    item = CorroborationItem(chunk_id=sig.chunk_id, publisher_group="reuters", verdict="supported")
+    signal_store.set_signal_corroboration(sig.id, [item], information_credibility([item]))
+    again = signal_store.get_signal(sig.id)
+    assert again.information_credibility == 1 and again.corroboration == [item] and again.corroborated_at
+    assert [s.id for s in signal_store.list_signals(SignalFilters(information_credibility=[1]))] == [sig.id]
+    with pytest.raises(KeyError):
+        signal_store.set_signal_corroboration(999_999, [], 6)
+
+
+def test_timeseries_and_movers_are_counts(signal_store):
     signals = signal_store.list_signals(SignalFilters(), limit=500)
     points = signal_timeseries(signals, "month")
     assert sum(p.count for p in points) == sum(1 for s in signals if s.published_at)
+    assert all(sum(p.by_materiality.values()) == p.count == sum(p.by_direction.values()) for p in points)
     movers = top_movers(signals, window_days=90, now=NOW)
     assert movers and movers[0].change != 0
 
@@ -178,16 +221,28 @@ def test_propose_versions_and_validates_evidence(corpus_store):
     assert len(corpus_store.recommendation_evidence(v1.id)) == len(hits)
 
 
-def test_approval_requires_two_independent_publishers(corpus_store):
+def test_approval_requires_verified_support_from_two_publishers(corpus_store, llm):
     sirtap = [c for c, _ in corpus_store.lexical_search("SIRTAP", 5, SearchFilters())]
-    rec = propose(corpus_store, _rec("gate"), sirtap, "agent:t")  # Airbus newsroom only
-    with pytest.raises(ApprovalBlockedError, match="has 1"):
-        change_status(corpus_store, rec.id, "approved", "alice", "looks good")
+    rec = propose(corpus_store, _rec("gate", title="SIRTAP uncrewed aerial system flight programme",
+                                     recommendation="Back the SIRTAP uncrewed aerial system flight programme."),
+                  sirtap, "agent:t")
     other = corpus_store.lexical_search("satellite communications", 1, SearchFilters())[0][0]
     corpus_store.link_recommendation_evidence(rec.id, [EvidenceLinkIn(chunk_id=other, linked_by="user:alice")])
+    with pytest.raises(ApprovalBlockedError, match="has 0"):  # two publishers, but nothing verified yet
+        change_status(corpus_store, rec.id, "approved", "alice", "looks good")
+    stats = verify_evidence(corpus_store, Verifier(llm), rec.id)
+    assert stats["supported"] >= 1 and stats["not_enough_info"] >= 1  # satcom passage is about something else
+    ev = corpus_store.recommendation_evidence(rec.id)
+    assert supporting_publishers(ev) == 1
+    assert {e.linked_by for e in ev if e.relation == "supports"} == {"verifier:verify_claim@1"}
+    with pytest.raises(ApprovalBlockedError, match="has 1"):
+        change_status(corpus_store, rec.id, "approved", "alice", "one publisher")
+    review_evidence(corpus_store, rec.id, other, "supports", "alice", "satcom award shows customer demand")
     assert change_status(corpus_store, rec.id, "approved", "alice", "two publishers now").status == "approved"
     with pytest.raises(InvalidTransitionError):
         change_status(corpus_store, rec.id, "approved", "alice", "again")
+    with pytest.raises(ValueError, match="unknown evidence"):
+        review_evidence(corpus_store, rec.id, 999_999, "supports", "alice", "nope nope")
 
 
 def test_business_unit_profile(signal_store, taxonomy):
@@ -201,7 +256,7 @@ def test_business_unit_profile(signal_store, taxonomy):
 def test_drilldown_rendering_fences_evidence(corpus_store):
     prompts = load_drilldown_prompts(SEEDS / "drilldown_prompts.yaml")
     assert len(prompts) == 7 and prompts[0].name == "why_this_recommendation"
-    chunk = corpus_store.lexical_search("cancel FCAS immediately", 1, SearchFilters())[0][0]
+    chunk = corpus_store.lexical_search("cancel FCAS immediately", 1, SearchFilters(include_quarantined=True))[0][0]
     rec = propose(corpus_store, _rec("drill"), [chunk], "agent:t")
     text = render_drilldown(prompts[2], rec, corpus_store.recommendation_evidence(rec.id))
     assert prompts[2].instruction in text and f'<evidence id="C{chunk}"' in text
@@ -237,8 +292,33 @@ def test_mentions_are_exact_name_matches_with_citations(corpus_store, registry):
         registry.mentions(corpus_store, "Nobody")
 
 
-def test_match_partners_explains_ranking(corpus_store, registry):
-    matches = registry.match(corpus_store, "systems integration and sensors", country="Spain")
-    assert matches[0].partner.name == "Indra" and matches[0].country_match
-    assert "capability overlap" in matches[0].rationale and matches[0].evidence_mentions >= 1
-    assert [m.score for m in matches] == sorted((m.score for m in matches), reverse=True)
+def test_bradley_terry_recovers_order_and_handles_ties():
+    games = [Game(0, 1, 1.0), Game(1, 0, 0.0), Game(1, 2, 1.0), Game(2, 1, 0.0), Game(0, 2, 1.0), Game(2, 0, 0.0)]
+    s = bradley_terry(3, games)
+    assert s[0] > s[1] > s[2] and abs(sum(s)) < 1e-9
+    assert all(abs(x) < 1e-9 for x in bradley_terry(2, [Game(0, 1, 0.5), Game(1, 0, 0.5)]))
+    assert 0.5 < win_probability(s[0], s[1]) < 1.0
+    with pytest.raises(ValueError):
+        Game(0, 0, 1.0)
+
+
+def test_partner_ranking_filters_assesses_compares_and_fits(corpus_store, registry, llm):
+    ranker = PartnerRanker(llm, registry, corpus_store, max_workers=2)
+    result = ranker.rank("systems integration and sensors", required_country="Spain")
+    assert [rp.partner.name for rp in result.ranked] == ["Indra", "GMV"]
+    indra, gmv = result.ranked
+    assert (indra.wins, indra.losses, gmv.wins, gmv.losses) == (1, 0, 0, 1)
+    assert indra.assessment.capability_fit == "strong" and gmv.assessment.capability_fit == "partial"
+    assert "quantum teleportation" in indra.assessment.removed_citations  # invented capability removed
+    assert "chunk 999999" in indra.assessment.removed_citations  # invented chunk id removed
+    assert indra.assessment.evidence and all("Indra" in e.text for e in indra.assessment.evidence)
+    assert {e.partner for e in result.excluded} >= {"Leonardo", "Thales"}  # required country is a filter
+    assert result.consistent_pairs == result.total_pairs == 1
+    assert result.prompts == ["partner_assess@1", "partner_compare@1"] and "Bradley-Terry" in result.method
+    assert len(llm.calls_for("partner_compare")) == 2  # one pair, both orders
+
+
+def test_position_bias_cancels_into_ties(corpus_store, registry, llm):
+    result = PartnerRanker(llm, registry, corpus_store, max_workers=2).rank("sensors")
+    assert len(result.ranked) == 4 and {rp.rank for rp in result.ranked} == {1}  # equal evidence: all tied
+    assert result.consistent_pairs == 0 and all(c.outcome == "tie" for c in result.comparisons)

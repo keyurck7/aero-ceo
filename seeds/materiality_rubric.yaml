@@ -1,0 +1,25 @@
+# Materiality rubric for strategic signals (ADR 0008, replaces topic_impact_weights).
+# The extractor assigns one level per signal and gives a one-sentence rationale; analysts label the same documents
+# and agreement is measured with weighted Cohen's kappa (docs/plan-no-heuristics.md §7). Edit with care: changing
+# a definition changes what every stored "high" means, so bump the version.
+version: "1"
+levels:
+  high:
+    definition: Could change a decision at Airbus Defence and Space board level within about 12 months.
+    examples:
+      - A programme Airbus leads or co-leads is cancelled, frozen, restructured or loses a partner nation.
+      - A contract, export campaign or competition worth roughly EUR 1 billion or more is awarded, lost or opened.
+      - A government decision changes the budget, workshare or requirements of a programme Airbus is part of.
+      - A competitor or partner takes a step that directly displaces or enables an Airbus product line.
+  medium:
+    definition: Relevant to a business unit's plan, but not by itself a board-level decision.
+    examples:
+      - A smaller contract, order, upgrade or milestone on an existing programme.
+      - A partner or competitor announcement in an adjacent market.
+      - A policy proposal or study that is not yet a decision.
+  low:
+    definition: Context worth tracking, with no near-term decision attached.
+    examples:
+      - Commentary, opinion or recap of already-known events.
+      - Exhibition news, demonstrations, ceremonies, product features without a buyer decision.
+      - Single-source speculation or rumour.

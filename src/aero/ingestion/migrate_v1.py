@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from aero.domain import SourceIn
-from aero.ingestion.collectors import SourcePlan
+from aero.ingestion.collectors import SourcePlan, slug
 from aero.ingestion.pipeline import MIN_WORDS, Ingestor, RawItem
 from aero.log import get_logger
 
@@ -142,13 +142,13 @@ def migrate_v1(path: str | Path, ingestor: Ingestor, plan: SourcePlan, run_id: i
         stype = row.source_type if row.source_type in _V1_TYPES else "unknown"
         known = next((s for s in plan.sources if s.name.lower() == row.source_name.lower()), None)
         if known:
-            source = known
+            source = plan.graded(known)
         elif stype == "news":
             source = plan.news_source(row.source_name)
         else:
-            source = SourceIn(name=row.source_name, source_type=stype,
-                              credibility_prior=min(max(float(row.trust_score), 0.0), 1.0),
-                              publisher_group=re.sub(r"[^a-z0-9]+", "_", row.source_name.lower()).strip("_"))
+            # v1's trust_score is not carried over: grades come only from the analyst's categories (ADR 0008).
+            source = plan.graded(SourceIn(name=row.source_name, source_type=stype,
+                                          publisher_group=slug(row.source_name)))
         result = ingestor.ingest(
             RawItem(source=source, title=title, url=row.url or f"v1://document/{row.id}", body=body,
                     content_level=level, published_at=row.published_at,  # type: ignore[arg-type]

@@ -21,7 +21,7 @@ from urllib.parse import quote_plus, urljoin, urlsplit
 import yaml
 from bs4 import BeautifulSoup
 
-from aero.domain import SourceIn
+from aero.domain import SourceCategory, SourceIn
 from aero.ingestion.extract import FeedItem, extract_article, parse_feed
 from aero.ingestion.http import PoliteFetcher
 from aero.ingestion.pipeline import RawItem
@@ -36,39 +36,62 @@ FullTextPolicy = Literal["research_mode", "respect_licence"]
 FULL_TEXT_LICENCES = {"full_text_permitted", "licensed", "own_content"}
 
 
+@dataclass(frozen=True)
+class PublisherGrading:
+    """Analyst-assigned Admiralty category for one publisher (ADR 0008). Exact name match only."""
+
+    category: SourceCategory = "unreviewed"
+    group: str | None = None
+    note: str = ""
+
+
+UNREVIEWED = PublisherGrading()
+
+
 @dataclass
 class SourcePlan:
     version: str
     sources: list[SourceIn]
-    publisher_priors: dict[str, float]
-    default_news_prior: float
+    publishers: dict[str, PublisherGrading]
     official_seed_urls: list[str]
     official_allowed_hosts: list[str]
     official_path_tokens: list[str]
     news_queries: list[str]
     news_feed_template: str
     full_text_policy: FullTextPolicy = "research_mode"
-    publisher_overrides: dict[str, float] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def prior_for(self, publisher: str) -> float:
-        lower = publisher.lower()
-        exact = {k.lower(): v for k, v in self.publisher_overrides.items()}
-        if lower in exact:
-            return exact[lower]
-        best = [v for k, v in self.publisher_priors.items() if k.lower() in lower]
-        return max(best) if best else self.default_news_prior
+    def grading_for(self, publisher: str) -> PublisherGrading:
+        """Exact (case-insensitive) name lookup. Unknown publishers are F, "cannot be judged"; no guessing."""
+        return self.publishers.get(publisher.strip().lower(), UNREVIEWED)
+
+    def graded(self, source: SourceIn) -> SourceIn:
+        """``source`` with the analyst's category, note and publisher group applied (if any are recorded)."""
+        g = self.grading_for(source.name)
+        if g is UNREVIEWED:
+            return source
+        return source.model_copy(update={"category": g.category, "reliability_note": g.note,
+                                         "publisher_group": g.group or source.publisher_group})
 
     def news_source(self, publisher: str) -> SourceIn:
         for s in self.sources:
             if s.name.lower() == publisher.lower():
-                return s
-        group = re.sub(r"[^a-z0-9]+", "_", publisher.lower()).strip("_") or "unknown"
-        return SourceIn(name=publisher, source_type="news", credibility_prior=self.prior_for(publisher),
-                        publisher_group=group, licence="unknown")
+                return self.graded(s)
+        return self.graded(SourceIn(name=publisher, source_type="news", publisher_group=slug(publisher),
+                                    licence="unknown"))
 
     def may_store_full_text(self, source: SourceIn) -> bool:
         return self.full_text_policy == "research_mode" or source.licence in FULL_TEXT_LICENCES
+
+
+def slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "unknown"
+
+
+def _grading(value: Any) -> PublisherGrading:
+    if isinstance(value, str):
+        return PublisherGrading(category=value)  # type: ignore[arg-type]
+    return PublisherGrading(category=value["category"], group=value.get("group"), note=value.get("note", ""))
 
 
 def load_source_plan(path: str | Path) -> SourcePlan:
@@ -77,15 +100,13 @@ def load_source_plan(path: str | Path) -> SourcePlan:
     return SourcePlan(
         version=str(data.get("version", "unversioned")),
         sources=[SourceIn(**s) for s in data.get("sources", [])],
-        publisher_priors={str(k): float(v) for k, v in data.get("publisher_priors", {}).items()},
-        default_news_prior=float(data.get("default_news_prior", 0.65)),
+        publishers={str(k).strip().lower(): _grading(v) for k, v in data.get("publishers", {}).items()},
         official_seed_urls=list(col.get("official_seed_urls", [])),
         official_allowed_hosts=list(col.get("official_allowed_hosts", [])),
         official_path_tokens=[t.lower() for t in col.get("official_path_tokens", [])],
         news_queries=list(col.get("news_queries", [])),
         news_feed_template=col.get("news_feed_template", ""),
         full_text_policy=data.get("full_text_policy", "research_mode"),
-        publisher_overrides={str(k): float(v) for k, v in data.get("publisher_overrides", {}).items()},
     )
 
 
@@ -113,8 +134,8 @@ def discover_links(html: str, base_url: str, allowed_hosts: list[str], path_toke
 
 def collect_official(fetcher: PoliteFetcher, plan: SourcePlan, limit: int = 40,
                      links_per_seed: int = 20) -> Iterator[RawItem]:
-    official = next((s for s in plan.sources if s.source_type == "official"), None) or SourceIn(
-        name="Airbus Official Web", source_type="official", credibility_prior=0.95, publisher_group="airbus"
+    official = next((plan.graded(s) for s in plan.sources if s.source_type == "official"), None) or SourceIn(
+        name="Airbus Official Web", source_type="official", category="official_primary", publisher_group="airbus"
     )
     urls: dict[str, None] = {}
     for seed in plan.official_seed_urls:

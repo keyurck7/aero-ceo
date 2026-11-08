@@ -10,9 +10,10 @@ Decisions: [`docs/adr/`](adr/).
 | 0 · Harden baseline | settings, deps, tests, CI, critical bug fixes | ✅ done in v2 code (v1 `app/` left frozen) |
 | 1 · Data platform | Postgres+pgvector / SQLite adapters, migrations, hybrid search + rerank, incremental embedding, v1 importer, eval harness | ✅ code + tests · ⏳ Postgres run in CI · ⏳ qrels need labels |
 | 2 · MCP servers | evidence ✅ · signals ✅ · strategy (+ 7 drill-down prompts, approval gate) ✅ · partners ✅ | ✅ 4 of 4 ([ADR 0007](adr/0007-signals-strategy-partners.md)) |
-| 3 · Agent | LangGraph graph, vLLM + LiteLLM, API gateway, thin UI | ⬜ next |
-| 4 · Verification & HITL | verify-mcp, repair loop, approvals | ⬜ |
-| 5 · Pipelines, observability, eval gates | Prefect, LLM signal extraction, OTel + Langfuse, DeepEval/promptfoo | ⬜ (flows are Prefect-ready) |
+| 2b · No heuristic weights | Admiralty grades, relevance-only ranking, LLM signals (verified, self-consistent), Bradley–Terry partner ranking, judgement evals ([ADR 0008](adr/0008-no-heuristic-weights.md), [plan](plan-no-heuristics.md)) | ✅ code + tests · ⏳ Qwen run on Data Lab · ⏳ gold labels |
+| 3 · Agent | plan → research (MCP tools) → write → verify → gate; LangGraph wiring with `interrupt()` review; `aero brief` | 🟡 core done; API gateway and UI next |
+| 4 · Verification & HITL | claim verifier ✅ (shared with signals), blocking gate ✅, interrupt review ✅, repair-by-re-research ⬜ | 🟡 |
+| 5 · Pipelines, observability, eval gates | Prefect, OTel + Langfuse; LLM signal extraction ✅ moved earlier | ⬜ (flows are Prefect-ready) |
 | 6 · Production readiness | OIDC, MCP gateway/OAuth, Helm/Terraform, runbooks | ⬜ |
 
 ## Findings closed by v2 code
@@ -92,10 +93,19 @@ Academic use → `research_mode` (ADR 0004) · Qwen only, local → Qwen3.6-27B 
 
 ## Next session
 
-1. Data Lab session (A6000, about 30 min): BGE ± reranker baseline on the draft qrels; review the qrels.
-2. Fix the corpus itself: add direct publisher RSS feeds (Breaking Defense, Defense News, Janes, Aviation Week,
-   FlightGlobal) so news items carry article text, not just headlines.
-3. `signals-mcp` (migration 0002: signals with chunk spans; rule:v1 extractor from
-   `seeds/signal_rules_v1.yaml`, LLM extractor behind an interface), then `strategy-mcp` and
-   `partners-mcp` from the seeds.
-4. Phase 3 orchestrator skeleton.
+1. Data Lab (A6000 or Pro 6000): `aero db migrate && aero sources grade`. Serve Qwen; plan A is upgrading
+   vLLM in the venv; plan B is `Qwen3-32B-FP8` / `Qwen3-30B-A3B-Instruct-2507`. Then run `aero llm ping`,
+   `aero signals extract`, `corroborate`, `aero brief` with `AERO_LLM_CASSETTE_MODE=record_missing`
+   (runbook "After pulling the no-heuristics change").
+2. Owner review:
+   - publisher categories in `seeds/sources.yaml` (drafted);
+   - label 60 sampled documents (`aero eval sample-signals`);
+   - 10 partner rankings;
+   - 100 verification pairs.
+3. Check the release gates in docs/plan-no-heuristics.md §7; commit the cassettes so CI replays real model output.
+4. Phase 3 continued:
+   - repair loop (re-research unsupported claims once);
+   - OpenTelemetry spans per node;
+   - Postgres checkpointer;
+   - API gateway and reviewer UI.
+5. Direct publisher RSS feeds so news items carry full text (most are headline-only today).

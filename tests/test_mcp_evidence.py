@@ -59,7 +59,7 @@ def test_search_then_read_then_corroborate(server):
 
     found, top, chunk, doc, related, res = run(go)
     assert not found.is_error and top["title"] == "Dassault and Airbus clash over FCAS leadership"
-    assert {"url", "publisher", "published_at", "credibility_prior", "char_start", "scores"} <= top.keys()
+    assert {"url", "publisher", "published_at", "source_reliability", "char_start", "scores"} <= top.keys()
     assert found.structured_content["independent_publishers"] >= 1
     assert chunk.structured_content["chunk"]["chunk_id"] == top["chunk_id"]
     assert doc.structured_content["provenance"] == {"collector": "test"}
@@ -91,13 +91,17 @@ def test_filters_and_helpful_errors(server):
     assert "FCAS" in topics.structured_content["topics"]
 
 
-def test_injection_flags_are_visible_to_the_agent(server):
+def test_quarantined_evidence_only_on_request(server):
     async def go():
         async with Client(server) as c:
-            return await c.call_tool("search_evidence", {"query": "cancel FCAS immediately", "top_k": 5})
+            default = await c.call_tool("search_evidence", {"query": "cancel FCAS immediately", "top_k": 5})
+            audit = await c.call_tool("search_evidence", {"query": "cancel FCAS immediately", "top_k": 5,
+                                                          "include_quarantined": True})
+            return default, audit
 
-    hits = run(go).structured_content["hits"]
-    assert any(h["injection_flags"] for h in hits)
+    default, audit = run(go)
+    assert not any(h["injection_flags"] for h in default.structured_content["hits"])  # quarantined by default
+    assert any(h["injection_flags"] for h in audit.structured_content["hits"])
 
 
 # ----------------------------------------------------------------- HTTP deployment surface

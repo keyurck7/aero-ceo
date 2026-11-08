@@ -16,3 +16,13 @@ the candidates, the set is not biased towards any one retriever. Review checklis
 2. Change a grade in `retrieval_qrels.jsonl`, then set `"label_status": "reviewed"` on that query.
 3. The qrels are tied to corpus `v1-import-2026-11-07` (Google-News canonical URLs). After re-collecting
    news, re-pool and re-label the new documents.
+
+## Judgement gold sets (ADR 0008)
+
+| File | Rows | Labelled by | Used by |
+|---|---|---|---|
+| `signal_gold.jsonl` | 60 documents (from `aero eval sample-signals`) | owner | `aero eval signals` (P/R/F1, direction accuracy, materiality kappa, rule baseline) |
+| `verification_gold.jsonl` | ~100 (claim, passage) pairs from real system output | owner | `aero eval judge` (Cohen's kappa) |
+| `partner_rankings.jsonl` | 10 needs, analyst order | owner | `aero eval partners` (Kendall tau-b) |
+
+Only rows with `reviewed_by` set count towards the release gates. Draft rows (`reviewed_by: null`) are templates.

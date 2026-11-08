@@ -1,5 +1,7 @@
 # Phase 3 plan: port the local LangGraph agent onto MCP tools and Qwen
 
+**Status 2026-11-08:** core implemented in `src/aero/orchestrator/` (nodes, runner, LangGraph wiring with `interrupt()` review, `aero brief`). The confidence and claim-support rows below are now governed by [ADR 0008](adr/0008-no-heuristic-weights.md): there is no confidence score; the header reports verified-claim counts, publisher independence and Admiralty grades.
+
 Source: branch `v1-local-snapshot`, `app/agent_graph/` (about 3,300 lines, written on Data Lab, never pushed before).
 Target: `src/aero/orchestrator/`, calling MCP servers and a vLLM-served Qwen model.
 

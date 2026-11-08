@@ -6,9 +6,10 @@ Pipeline per query:
    use the *same* filters inside the database query (finding B6).
 2. Reciprocal Rank Fusion: score-scale-free, robust, no tuning needed.
 3. Optional cross-encoder rerank of the fused candidates.
-4. Final score = relevance (optionally blended with credibility/recency; off by
-   default after the 2026-11-08 ablation). Publishers below a credibility floor
-   are filtered out. Every factor is returned in ``ScoreBreakdown``.
+4. Order = rerank order if reranking ran, else RRF order. There is no blend with
+   trust or recency (ADR 0008): source reliability is an Admiralty grade used as a
+   *filter* (grade E excluded by default) and shown on every hit; recency is a
+   date filter. Quarantined (injection-flagged) documents are excluded unless asked for.
 
 Also reports ``independent_publishers``: syndicated copies count once. The
 orchestrator's coverage check ("≥ 2 independent publishers") needs this number.
@@ -21,11 +22,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from aero.config import Settings
-from aero.dates import recency_weight, utcnow
-from aero.domain import EvidenceHit, ScoreBreakdown, SearchFilters, SearchResult
+from aero.domain import RELIABILITY_GRADES, EvidenceHit, ScoreBreakdown, SearchFilters, SearchResult, SourceReliability
 from aero.embeddings import Embedder
 from aero.rerank import Reranker
-from aero.scoring import blend_final, evidence_credibility
 from aero.storage import Store
 
 
@@ -34,10 +33,8 @@ class RetrievalConfig:
     mode: str = "hybrid"
     candidate_k: int = 50
     rrf_k: int = 60
-    credibility_weight: float = 0.0
-    recency_weight: float = 0.0
-    min_credibility: float = 0.15
-    recency_half_life_days: float = 180.0
+    # Policy (ADR 0008): Admiralty grades excluded unless the caller lists them explicitly.
+    exclude_reliability: tuple[SourceReliability, ...] = ("E",)
 
     @classmethod
     def from_settings(cls, s: Settings) -> RetrievalConfig:
@@ -45,11 +42,12 @@ class RetrievalConfig:
             mode=s.retrieval_mode,
             candidate_k=s.retrieval_candidate_k,
             rrf_k=s.retrieval_rrf_k,
-            credibility_weight=s.retrieval_credibility_weight,
-            recency_weight=s.retrieval_recency_weight,
-            min_credibility=s.retrieval_min_credibility,
-            recency_half_life_days=s.recency_half_life_days,
+            exclude_reliability=s.retrieval_excluded_grades,
         )
+
+    @property
+    def default_grades(self) -> list[SourceReliability]:
+        return [g for g in RELIABILITY_GRADES if g not in self.exclude_reliability]
 
 
 def rrf_fuse(rankings: list[list[int]], k: int = 60) -> dict[int, float]:
@@ -83,7 +81,7 @@ class HybridRetriever:
         if not query:
             raise ValueError("query must not be empty")
         cfg = self.config
-        filters = self._with_floor(filters or SearchFilters())
+        filters = self._with_policy(filters or SearchFilters())
         n = max(cfg.candidate_k, top_k)
 
         dense: list[tuple[int, float]] = []
@@ -106,33 +104,22 @@ class HybridRetriever:
         candidates = [c for c in candidates if c in evidence]
 
         rerank_scores: dict[int, float] = {}
-        rerank_norm: dict[int, float] = {}
         if self.reranker is not None and candidates:
             scores = self.reranker.score(query, [evidence[c].text for c in candidates])
             rerank_scores = dict(zip(candidates, scores, strict=True))
-            # Min-max within this candidate set. Cross-encoder probabilities are often compressed near 0
-            # (e.g. for 10-word headlines); raw values would let the credibility term outvote relevance.
-            lo, hi = min(scores), max(scores)
-            rerank_norm = {c: (s - lo) / (hi - lo) if hi > lo else 1.0 for c, s in rerank_scores.items()}
 
-        # Relevance in [0, 1]: normalised rerank score if available, else RRF normalised to the best candidate.
-        best_rrf = max(fused[c] for c in candidates) if candidates else 1.0
-        now = filters.as_of or utcnow()
         hits: list[EvidenceHit] = []
         for cid in candidates:
             ev = evidence[cid]
-            relevance = rerank_norm[cid] if rerank_norm else fused[cid] / best_rrf
-            cred = evidence_credibility(ev.credibility_prior, ev.content_level, ev.injection_flags)
-            rec = recency_weight(ev.published_at, now=now, half_life_days=cfg.recency_half_life_days)
-            final = blend_final(relevance, cred, rec, cfg.credibility_weight, cfg.recency_weight)
             d, lx = dense_rank.get(cid), lex_rank.get(cid)
+            rrf = round(fused[cid], 6)
+            rerank = round(rerank_scores[cid], 6) if rerank_scores else None
             hits.append(EvidenceHit(
                 **ev.model_dump(), rank=0,
                 scores=ScoreBreakdown(
                     dense=round(d[1], 6) if d else None, dense_rank=d[0] if d else None,
                     lexical=round(lx[1], 6) if lx else None, lexical_rank=lx[0] if lx else None,
-                    rrf=round(fused[cid], 6), rerank=round(rerank_scores[cid], 6) if rerank_scores else None,
-                    credibility=cred, recency=round(rec, 4), final=final,
+                    rrf=rrf, rerank=rerank, final=rerank if rerank is not None else rrf,
                 ),
             ))
         hits.sort(key=lambda h: (-h.scores.final, h.chunk_id))
@@ -143,11 +130,11 @@ class HybridRetriever:
             query=query, filters=filters, hits=hits, independent_publishers=independent_publishers(hits)
         )
 
-    def _with_floor(self, filters: SearchFilters) -> SearchFilters:
-        """Apply the configured credibility floor unless the caller asked for a stricter one."""
-        if filters.min_credibility >= self.config.min_credibility:
+    def _with_policy(self, filters: SearchFilters) -> SearchFilters:
+        """Apply the default grade policy unless the caller chose grades explicitly."""
+        if filters.source_reliability is not None:
             return filters
-        return filters.model_copy(update={"min_credibility": self.config.min_credibility})
+        return filters.model_copy(update={"source_reliability": self.config.default_grades})
 
     def find_related(self, chunk_id: int, top_k: int = 5, other_publishers_only: bool = True) -> list[EvidenceHit]:
         """Corroboration: passages semantically closest to ``chunk_id``, from other documents/publishers."""
@@ -159,7 +146,7 @@ class HybridRetriever:
             vec = stored[0]
         else:
             vec = self.embedder.embed_documents([anchor.text])[0]
-        filters = self._with_floor(SearchFilters(exclude_document_ids=[anchor.document_id]))
+        filters = self._with_policy(SearchFilters(exclude_document_ids=[anchor.document_id]))
         raw = self.store.dense_search(np.asarray(vec), max(top_k * 4, 20), filters, self.embedder.model_name)
         evidence = self.store.get_evidence([c for c, _ in raw])
         anchor_group = (anchor.publisher_group or anchor.publisher).lower()
@@ -170,12 +157,9 @@ class HybridRetriever:
                 continue
             if other_publishers_only and (ev.publisher_group or ev.publisher).lower() == anchor_group:
                 continue
-            cred = evidence_credibility(ev.credibility_prior, ev.content_level, ev.injection_flags)
-            rec = recency_weight(ev.published_at, half_life_days=self.config.recency_half_life_days)
             out.append(EvidenceHit(
                 **ev.model_dump(), rank=len(out) + 1,
-                scores=ScoreBreakdown(dense=round(score, 6), dense_rank=len(out) + 1, rrf=0.0, credibility=cred,
-                                      recency=round(rec, 4), final=round(score, 6)),
+                scores=ScoreBreakdown(dense=round(score, 6), dense_rank=len(out) + 1, rrf=0.0, final=round(score, 6)),
             ))
             if len(out) >= top_k:
                 break

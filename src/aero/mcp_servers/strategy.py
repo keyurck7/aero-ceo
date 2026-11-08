@@ -3,8 +3,8 @@ and the seven v1 drill-down actions as MCP prompts.
 
 Write tools (``propose_recommendation``, ``update_recommendation_status``) are registered
 only when ``allow_writes=True``, so a read-only deployment cannot write even if a token leaks.
-Proposals are always drafts. Approval needs a named reviewer, a reason, and evidence from
-two or more independent publishers.
+Proposals are always drafts. Approval needs a named reviewer, a reason, and evidence *verified
+as supporting* from two or more independent publishers (``review_evidence`` or ``aero rec verify``).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from aero import __version__
 from aero.domain import (
+    EvidenceRelation,
     Priority,
     Recommendation,
     RecommendationEvidence,
@@ -31,10 +32,12 @@ from aero.intelligence.strategy import (
     DrilldownPrompt,
     RiskChecklist,
     business_unit_profile,
+    candidate_publishers,
     change_status,
-    independent_publishers,
     propose,
     render_drilldown,
+    review_evidence,
+    supporting_publishers,
 )
 from aero.storage import Store
 from aero.storage.base import InvalidTransitionError
@@ -57,7 +60,9 @@ class RecommendationList(BaseModel):
 class RecommendationDetail(BaseModel):
     recommendation: Recommendation
     evidence: list[RecommendationEvidence]
-    independent_publishers: int
+    supporting_publishers: int = Field(description="Publisher groups with evidence verified as supporting "
+                                                   "(what approval requires >= 2 of)")
+    candidate_publishers: int = Field(description="Publisher groups among links not judged contradicting")
     reviews: list[RecommendationReview]
     approved_advice: bool = Field(description="False for drafts and retired items: do not present as approved")
 
@@ -77,7 +82,8 @@ def register_strategy_tools(mcp: MCPServer, store: Store, taxonomy: Taxonomy, ch
             raise ToolError(f"recommendation {rec_id} not found")
         evidence = store.recommendation_evidence(rec_id)
         return RecommendationDetail(recommendation=rec, evidence=evidence,
-                                    independent_publishers=independent_publishers(evidence),
+                                    supporting_publishers=supporting_publishers(evidence),
+                                    candidate_publishers=candidate_publishers(evidence),
                                     reviews=store.recommendation_reviews(rec_id),
                                     approved_advice=rec.status == "approved")
 
@@ -153,11 +159,31 @@ def register_strategy_tools(mcp: MCPServer, store: Store, taxonomy: Taxonomy, ch
         ) -> RecommendationDetail:
             """Move a recommendation draft -> approved | retired, or approved -> retired. Audited.
 
-            Approval is refused unless the linked evidence comes from at least two independent publishers.
+            Approval is refused unless evidence verified as supporting comes from at least two independent publishers.
             """
             try:
                 change_status(store, recommendation_id, status, reviewer, reason)
             except (ApprovalBlockedError, InvalidTransitionError, ValueError) as exc:
+                raise ToolError(str(exc)) from exc
+            except KeyError as exc:
+                raise ToolError(f"recommendation {recommendation_id} not found") from exc
+            return _detail(recommendation_id)
+
+        @mcp.tool(annotations=WRITE)
+        def review_evidence_link(
+            recommendation_id: int,
+            chunk_id: int,
+            relation: EvidenceRelation,
+            reviewer: Annotated[str, Field(min_length=2)],
+            note: Annotated[str, Field(min_length=5)],
+        ) -> RecommendationDetail:
+            """A named human reviewer marks one evidence chunk as supports / contradicts / candidate. Audited.
+
+            Use after reading the passage. An agent must not call this on its own judgement.
+            """
+            try:
+                review_evidence(store, recommendation_id, chunk_id, relation, reviewer, note)
+            except ValueError as exc:
                 raise ToolError(str(exc)) from exc
             except KeyError as exc:
                 raise ToolError(f"recommendation {recommendation_id} not found") from exc

@@ -103,3 +103,19 @@ def test_stdio_server_for_desktop_hosts(cli_env, v1_db, capfd):  # capfd: subpro
 
     res = anyio.run(go)
     assert not res.is_error and "FCAS" in res.structured_content["hits"][0]["title"]
+
+
+def test_cli_grading_and_llm_jobs_refuse_without_a_model(cli_env, v1_db, capsys):
+    assert cli.main(["ingest", "v1", str(v1_db)]) == 0
+    capsys.readouterr()
+    assert cli.main(["sources", "grade"]) == 0
+    grades = json.loads(capsys.readouterr().out)
+    assert sum(grades.values()) >= 1 and set(grades) <= {f"grade_{g}" for g in "ABCDEF"}
+    # No AERO_LLM_BASE_URL: every model judgement refuses instead of falling back to a heuristic.
+    assert cli.main(["llm", "ping"]) == 1
+    assert cli.main(["signals", "extract"]) == 1
+    assert "AERO_LLM_BASE_URL" in capsys.readouterr().err
+    out = cli_env / "todo.jsonl"
+    assert cli.main(["eval", "sample-signals", "--n", "2", "--out", str(out)]) == 0
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0]["reviewed_by"] is None

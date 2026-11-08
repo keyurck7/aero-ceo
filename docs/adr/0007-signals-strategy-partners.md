@@ -1,6 +1,6 @@
 # ADR 0007: Signals, recommendations and partners as MCP servers
 
-**Status:** accepted · 2026-11-08
+**Status:** accepted · 2026-11-08 · signal scoring, the rule extractor, the approval count and `match_partners` are superseded by [ADR 0008](0008-no-heuristic-weights.md)
 
 ## Decisions
 

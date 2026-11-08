@@ -21,6 +21,7 @@ import numpy as np
 from aero.dates import from_db, to_db, utcnow
 from aero.domain import (
     ChunkIn,
+    CorroborationItem,
     Document,
     DocumentIn,
     EvidenceChunk,
@@ -39,12 +40,15 @@ from aero.domain import (
     StoreStats,
 )
 from aero.storage.base import (
+    SIGNAL_COLUMNS,
+    SIGNAL_ORDER,
     DuplicateDocumentError,
     Store,
     check_transition,
     doc_simhash_columns,
     is_near_duplicate,
     lexical_terms,
+    signal_filter_columns,
     simhash_bands,
 )
 from aero.storage.migrations import discover
@@ -54,7 +58,7 @@ _EVIDENCE_SELECT = """
 SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.text, c.char_start, c.char_end,
        d.title, d.url, d.canonical_url, d.published_at, d.collected_at, d.content_level,
        d.injection_flags, s.name AS publisher, s.publisher_group, s.source_type, s.licence,
-       s.credibility_prior
+       s.reliability AS source_reliability
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
 JOIN sources s ON s.id = d.source_id
@@ -130,17 +134,21 @@ class SQLiteStore(Store):
     def _source(row: sqlite3.Row) -> Source:
         return Source(
             id=row["id"], name=row["name"], source_type=row["source_type"], base_url=row["base_url"],
-            credibility_prior=row["credibility_prior"], publisher_group=row["publisher_group"],
-            licence=row["licence"], created_at=SQLiteStore._ts(row["created_at"]),
+            category=row["category"], reliability_note=row["reliability_note"],
+            publisher_group=row["publisher_group"], licence=row["licence"],
+            created_at=SQLiteStore._ts(row["created_at"]),
         )
 
     def upsert_source(self, source: SourceIn) -> Source:
         with self._tx() as cur:
             cur.execute(
-                """INSERT INTO sources (name, source_type, base_url, credibility_prior, publisher_group, licence)
-                   VALUES (:name, :source_type, :base_url, :credibility_prior, :publisher_group, :licence)
+                """INSERT INTO sources (name, source_type, base_url, category, reliability, reliability_note,
+                                        publisher_group, licence)
+                   VALUES (:name, :source_type, :base_url, :category, :reliability, :reliability_note,
+                           :publisher_group, :licence)
                    ON CONFLICT(name) DO UPDATE SET source_type=excluded.source_type, base_url=excluded.base_url,
-                     credibility_prior=excluded.credibility_prior, publisher_group=excluded.publisher_group,
+                     category=excluded.category, reliability=excluded.reliability,
+                     reliability_note=excluded.reliability_note, publisher_group=excluded.publisher_group,
                      licence=excluded.licence""",
                 source.model_dump(),
             )
@@ -187,7 +195,16 @@ class SQLiteStore(Store):
             content_hash=row["content_hash"], simhash=from_signed64(row["simhash"]),
             ingestion_context=json.loads(row["ingestion_context"]),
             injection_flags=json.loads(row["injection_flags"]), raw_object_key=row["raw_object_key"],
+            topics_tagger=row["topics_tagger"],
         )
+
+    def set_document_topics(self, document_id: int, topics: Sequence[str], tagger: str) -> None:
+        with self._tx() as cur:
+            if cur.execute("UPDATE documents SET topics_tagger = ? WHERE id = ?", (tagger, document_id)).rowcount == 0:
+                raise KeyError(document_id)
+            cur.execute("DELETE FROM document_topics WHERE document_id = ?", (document_id,))
+            cur.executemany("INSERT OR IGNORE INTO document_topics (document_id, topic) VALUES (?, ?)",
+                            [(document_id, t) for t in topics])
 
     def insert_document(self, doc: DocumentIn, pipeline_run_id: int | None = None) -> Document:
         dup = self.find_duplicate(doc.canonical_url, doc.content_hash, doc.simhash)
@@ -292,9 +309,11 @@ class SQLiteStore(Store):
         if f.published_before:
             where.append("d.published_at < ?")
             params.append(to_db(f.published_before))
-        if f.min_credibility > 0:
-            where.append("s.credibility_prior >= ?")
-            params.append(f.min_credibility)
+        if f.source_reliability is not None:
+            where.append(f"s.reliability IN ({','.join('?' * len(f.source_reliability)) or 'NULL'})")
+            params += list(f.source_reliability)
+        if not f.include_quarantined:
+            where.append("d.injection_flags = '[]'")
         if f.as_of:
             where.append("d.collected_at <= ?")
             params.append(to_db(f.as_of))
@@ -360,7 +379,7 @@ class SQLiteStore(Store):
             text=row["text"], char_start=row["char_start"], char_end=row["char_end"], title=row["title"],
             url=row["url"], canonical_url=row["canonical_url"], publisher=row["publisher"],
             publisher_group=row["publisher_group"], source_type=row["source_type"], licence=row["licence"],
-            credibility_prior=row["credibility_prior"], published_at=from_db(row["published_at"]),
+            source_reliability=row["source_reliability"], published_at=from_db(row["published_at"]),
             collected_at=self._ts(row["collected_at"]), topics=topics.get(row["document_id"], []),
             content_level=row["content_level"], injection_flags=json.loads(row["injection_flags"]),
         )
@@ -410,34 +429,32 @@ class SQLiteStore(Store):
                 if sig.document_id != document_id or sig.extractor != extractor:
                     raise ValueError("signal does not belong to this document/extractor")
                 cur.execute(
-                    """INSERT INTO signals (document_id, chunk_id, signal_type, title, description, topic,
-                         business_unit, evidence_quote, quote_start, quote_end, impact, confidence, extractor)
-                       VALUES (:document_id, :chunk_id, :signal_type, :title, :description, :topic,
-                         :business_unit, :evidence_quote, :quote_start, :quote_end, :impact, :confidence,
-                         :extractor)""",
-                    sig.model_dump(),
+                    f"INSERT INTO signals ({', '.join(SIGNAL_COLUMNS)}) "
+                    f"VALUES ({', '.join(':' + c for c in SIGNAL_COLUMNS)})",
+                    {**sig.model_dump(), "disputed_fields": json.dumps(sig.disputed_fields)},
                 )
         return len(signals)
 
     _SIGNAL_SELECT = """
-        SELECT g.*, d.title AS document_title, d.url, d.published_at, s.name AS publisher, s.source_type,
-               s.credibility_prior
+        SELECT g.*, d.title AS document_title, d.url, d.published_at, d.content_level, s.name AS publisher,
+               s.publisher_group, s.source_type, s.reliability AS source_reliability
         FROM signals g JOIN documents d ON d.id = g.document_id JOIN sources s ON s.id = d.source_id"""
 
     def _signal(self, row: sqlite3.Row) -> Signal:
         data = {k: row[k] for k in row.keys()}  # noqa: SIM118 - sqlite3.Row is not a dict
         data["extracted_at"] = self._ts(row["extracted_at"])
         data["published_at"] = from_db(row["published_at"])
+        data["corroborated_at"] = from_db(row["corroborated_at"])
+        data["disputed_fields"] = json.loads(row["disputed_fields"])
+        data["corroboration"] = json.loads(row["corroboration"])
         return Signal(**data)
 
     def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
         where: list[str] = []
         params: list[Any] = []
-        for column, values in (("g.signal_type", filters.signal_types), ("g.topic", filters.topics),
-                               ("g.business_unit", filters.business_units)):
-            if values:
-                where.append(f"{column} IN ({','.join('?' * len(values))})")
-                params += list(values)
+        for column, values in signal_filter_columns(filters):
+            where.append(f"{column} IN ({','.join('?' * len(values))})")
+            params += list(values)
         if filters.extractor:
             where.append("g.extractor = ?")
             params.append(filters.extractor)
@@ -447,16 +464,22 @@ class SQLiteStore(Store):
         if filters.published_before:
             where.append("d.published_at < ?")
             params.append(to_db(filters.published_before))
-        if filters.min_impact > 0:
-            where.append("g.impact >= ?")
-            params.append(filters.min_impact)
         clause = " AND ".join(where) if where else "1=1"
         rows = self._q(
-            f"{self._SIGNAL_SELECT} WHERE {clause} "
-            "ORDER BY g.impact DESC, g.confidence DESC, d.published_at DESC NULLS LAST, g.id LIMIT ?",
+            f"{self._SIGNAL_SELECT} WHERE {clause} ORDER BY {SIGNAL_ORDER} LIMIT ?",
             [*params, limit],
         )
         return [self._signal(r) for r in rows]
+
+    def set_signal_corroboration(self, signal_id: int, items: Sequence[CorroborationItem],
+                                 information_credibility: int) -> None:
+        with self._tx() as cur:
+            updated = cur.execute(
+                "UPDATE signals SET corroboration = ?, information_credibility = ?, corroborated_at = ? WHERE id = ?",
+                (json.dumps([i.model_dump() for i in items]), information_credibility, to_db(utcnow()), signal_id),
+            ).rowcount
+            if updated == 0:
+                raise KeyError(signal_id)
 
     def get_signal(self, signal_id: int) -> Signal | None:
         rows = self._q(f"{self._SIGNAL_SELECT} WHERE g.id = ?", (signal_id,))

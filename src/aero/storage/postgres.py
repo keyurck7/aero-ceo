@@ -19,6 +19,7 @@ import numpy as np
 
 from aero.domain import (
     ChunkIn,
+    CorroborationItem,
     Document,
     DocumentIn,
     EvidenceChunk,
@@ -37,12 +38,15 @@ from aero.domain import (
     StoreStats,
 )
 from aero.storage.base import (
+    SIGNAL_COLUMNS,
+    SIGNAL_ORDER,
     DuplicateDocumentError,
     Store,
     check_transition,
     doc_simhash_columns,
     is_near_duplicate,
     lexical_terms,
+    signal_filter_columns,
     simhash_bands,
 )
 from aero.storage.migrations import discover
@@ -63,7 +67,7 @@ _EVIDENCE_SELECT = """
 SELECT c.id AS chunk_id, c.document_id, c.chunk_index, c.text, c.char_start, c.char_end,
        d.title, d.url, d.canonical_url, d.published_at, d.collected_at, d.content_level, d.topics,
        d.injection_flags, s.name AS publisher, s.publisher_group, s.source_type, s.licence,
-       s.credibility_prior
+       s.reliability AS source_reliability
 FROM chunks c
 JOIN documents d ON d.id = c.document_id
 JOIN sources s ON s.id = d.source_id
@@ -140,10 +144,13 @@ class PostgresStore(Store):
 
     def upsert_source(self, source: SourceIn) -> Source:
         rows = self._q(
-            """INSERT INTO sources (name, source_type, base_url, credibility_prior, publisher_group, licence)
-               VALUES (%(name)s, %(source_type)s, %(base_url)s, %(credibility_prior)s, %(publisher_group)s, %(licence)s)
+            """INSERT INTO sources (name, source_type, base_url, category, reliability, reliability_note,
+                                    publisher_group, licence)
+               VALUES (%(name)s, %(source_type)s, %(base_url)s, %(category)s, %(reliability)s, %(reliability_note)s,
+                       %(publisher_group)s, %(licence)s)
                ON CONFLICT (name) DO UPDATE SET source_type = EXCLUDED.source_type, base_url = EXCLUDED.base_url,
-                 credibility_prior = EXCLUDED.credibility_prior, publisher_group = EXCLUDED.publisher_group,
+                 category = EXCLUDED.category, reliability = EXCLUDED.reliability,
+                 reliability_note = EXCLUDED.reliability_note, publisher_group = EXCLUDED.publisher_group,
                  licence = EXCLUDED.licence
                RETURNING *""",
             source.model_dump(),
@@ -186,6 +193,13 @@ class PostgresStore(Store):
         data["topics"] = list(row["topics"] or [])
         data["injection_flags"] = list(row["injection_flags"] or [])
         return Document(**data)
+
+    def set_document_topics(self, document_id: int, topics: Sequence[str], tagger: str) -> None:
+        with self.pool.connection() as conn:
+            cur = conn.execute("UPDATE documents SET topics = %s, topics_tagger = %s WHERE id = %s",
+                               (list(dict.fromkeys(topics)), tagger, document_id))
+            if cur.rowcount == 0:
+                raise KeyError(document_id)
 
     def insert_document(self, doc: DocumentIn, pipeline_run_id: int | None = None) -> Document:
         dup = self.find_duplicate(doc.canonical_url, doc.content_hash, doc.simhash)
@@ -284,9 +298,11 @@ class PostgresStore(Store):
         if f.published_before:
             where.append("d.published_at < %(f_before)s")
             p["f_before"] = f.published_before
-        if f.min_credibility > 0:
-            where.append("s.credibility_prior >= %(f_min_cred)s")
-            p["f_min_cred"] = f.min_credibility
+        if f.source_reliability is not None:
+            where.append("s.reliability = ANY(%(f_reliability)s::text[])")
+            p["f_reliability"] = list(f.source_reliability)
+        if not f.include_quarantined:
+            where.append("cardinality(d.injection_flags) = 0")
         if f.as_of:
             where.append("d.collected_at <= %(f_as_of)s")
             p["f_as_of"] = f.as_of
@@ -363,29 +379,24 @@ class PostgresStore(Store):
                 if sig.document_id != document_id or sig.extractor != extractor:
                     raise ValueError("signal does not belong to this document/extractor")
                 conn.execute(
-                    """INSERT INTO signals (document_id, chunk_id, signal_type, title, description, topic,
-                         business_unit, evidence_quote, quote_start, quote_end, impact, confidence, extractor)
-                       VALUES (%(document_id)s, %(chunk_id)s, %(signal_type)s, %(title)s, %(description)s,
-                         %(topic)s, %(business_unit)s, %(evidence_quote)s, %(quote_start)s, %(quote_end)s,
-                         %(impact)s, %(confidence)s, %(extractor)s)""",
-                    sig.model_dump(),
+                    f"INSERT INTO signals ({', '.join(SIGNAL_COLUMNS)}) "
+                    f"VALUES ({', '.join(f'%({c})s' for c in SIGNAL_COLUMNS)})",
+                    {**sig.model_dump(), "disputed_fields": Jsonb(sig.disputed_fields)},
                 )
         return len(signals)
 
     _SIGNAL_SELECT = """
-        SELECT g.*, d.title AS document_title, d.url, d.published_at, s.name AS publisher, s.source_type,
-               s.credibility_prior
+        SELECT g.*, d.title AS document_title, d.url, d.published_at, d.content_level, s.name AS publisher,
+               s.publisher_group, s.source_type, s.reliability AS source_reliability
         FROM signals g JOIN documents d ON d.id = g.document_id JOIN sources s ON s.id = d.source_id"""
 
     def list_signals(self, filters: SignalFilters, limit: int = 50) -> list[Signal]:
         where: list[str] = []
         p: dict[str, Any] = {"limit": limit}
-        for column, name, values in (("g.signal_type", "types", filters.signal_types),
-                                     ("g.topic", "topics", filters.topics),
-                                     ("g.business_unit", "bus", filters.business_units)):
-            if values:
-                where.append(f"{column} = ANY(%({name})s::text[])")
-                p[name] = list(values)
+        for i, (column, values) in enumerate(signal_filter_columns(filters)):
+            cast_to = "int[]" if column == "g.information_credibility" else "text[]"
+            where.append(f"{column} = ANY(%(v{i})s::{cast_to})")
+            p[f"v{i}"] = values
         if filters.extractor:
             where.append("g.extractor = %(extractor)s")
             p["extractor"] = filters.extractor
@@ -395,20 +406,24 @@ class PostgresStore(Store):
         if filters.published_before:
             where.append("d.published_at < %(before)s")
             p["before"] = filters.published_before
-        if filters.min_impact > 0:
-            where.append("g.impact >= %(min_impact)s")
-            p["min_impact"] = filters.min_impact
         clause = " AND ".join(where) if where else "TRUE"
-        rows = self._q(
-            f"{self._SIGNAL_SELECT} WHERE {clause} "
-            "ORDER BY g.impact DESC, g.confidence DESC, d.published_at DESC NULLS LAST, g.id LIMIT %(limit)s",
-            p,
-        )
+        rows = self._q(f"{self._SIGNAL_SELECT} WHERE {clause} ORDER BY {SIGNAL_ORDER} LIMIT %(limit)s", p)
         return [Signal(**r) for r in rows]
 
     def get_signal(self, signal_id: int) -> Signal | None:
         rows = self._q(f"{self._SIGNAL_SELECT} WHERE g.id = %s", (signal_id,))
         return Signal(**rows[0]) if rows else None
+
+    def set_signal_corroboration(self, signal_id: int, items: Sequence[CorroborationItem],
+                                 information_credibility: int) -> None:
+        with self.pool.connection() as conn:
+            cur = conn.execute(
+                "UPDATE signals SET corroboration = %s, information_credibility = %s, corroborated_at = now() "
+                "WHERE id = %s",
+                (Jsonb([i.model_dump() for i in items]), information_credibility, signal_id),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(signal_id)
 
     # ------------------------------------------------------------------ recommendations
     @staticmethod

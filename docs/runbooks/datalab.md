@@ -97,6 +97,53 @@ vllm serve Qwen/Qwen3.6-27B \
 
 Smoke test: `curl localhost:8000/v1/models`. The orchestrator (phase 3) reads `AERO_LLM_BASE_URL=http://localhost:8000/v1`.
 
+## After pulling the no-heuristics change (ADR 0008) and phase 3
+
+No re-import is needed: migration 0003 converts the database in place. It drops the rule-based signals, which
+are derived data, and adds Admiralty source grades.
+
+```bash
+cd ~/aero-ceo && git pull && source .venv/bin/activate
+pip install -e ".[mcp,extract,agent]"
+# If your .env still has AERO_RETRIEVAL_CREDIBILITY_WEIGHT / _RECENCY_WEIGHT / _MIN_CREDIBILITY /
+# AERO_RECENCY_HALF_LIFE_DAYS, delete those lines: they were removed and now fail with an explanation.
+aero db migrate                 # applies 0003
+aero sources grade              # Admiralty categories from seeds/sources.yaml -> grades A-F
+aero search "FCAS workshare dispute"   # hits now show the source grade; grade E excluded by default
+```
+
+Then serve Qwen (section above) in a second terminal and point AERO-CEO at it:
+
+```bash
+export AERO_LLM_BASE_URL=http://localhost:8000/v1
+export AERO_LLM_MODEL=qwen3.6-27b          # = --served-model-name
+aero llm ping                              # must print structured_output {"ok": true, ...}
+
+# Record every model call so the results are reproducible and reviewable (commit evals/cassettes later)
+export AERO_LLM_CASSETTE_MODE=record_missing
+
+aero signals extract --rejections data/signal_rejections.jsonl   # ~186 docs x (3 samples + verifications)
+aero signals corroborate                                          # Admiralty information credibility 1/5/6
+aero rec verify 1                                                 # candidate evidence -> supports/contradicts
+aero partners rank "mission systems for uncrewed aircraft" --country Spain
+aero brief "What does the FCAS dispute mean for Airbus, and what should we do next?"
+```
+
+Send back:
+- the JSON printed by `aero signals extract`;
+- `data/signal_rejections.jsonl`;
+- the output of `aero brief`.
+
+Labelling (the release gates in docs/plan-no-heuristics.md §7 need human labels):
+
+```bash
+aero eval sample-signals --n 60 --out evals/datasets/signal_gold_todo.jsonl
+# label each row's "signals" (type, topic, direction, event_status, materiality), set "reviewed_by"
+aero eval signals --gold evals/datasets/signal_gold.jsonl     # LLM vs gold, and vs the keyword baseline
+aero eval judge                                               # verifier vs human labels (Cohen's kappa)
+aero eval partners                                            # ranking vs analysts (Kendall tau-b)
+```
+
 ## Credit discipline
 - Stop the server from the Hub control panel when you finish. An idle kernel still bills.
 - Keep `HF_HOME` and `data/` in your home directory, so a new spawn does not re-download or re-import.

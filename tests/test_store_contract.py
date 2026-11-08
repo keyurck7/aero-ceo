@@ -25,9 +25,11 @@ def test_migrate_is_idempotent(store):
 
 
 def test_source_upsert_updates_in_place(store):
-    a = store.upsert_source(SourceIn(name="Reuters", source_type="news", credibility_prior=0.8))
-    b = store.upsert_source(SourceIn(name="Reuters", source_type="news", credibility_prior=0.9, licence="licensed"))
-    assert a.id == b.id and b.credibility_prior == pytest.approx(0.9) and b.licence == "licensed"
+    a = store.upsert_source(SourceIn(name="Reuters", source_type="news"))
+    assert a.category == "unreviewed" and a.reliability == "F"  # unknown publishers cannot be judged
+    b = store.upsert_source(SourceIn(name="Reuters", source_type="news", category="established_newsroom",
+                                     reliability_note="named editors", licence="licensed"))
+    assert a.id == b.id and b.reliability == "B" and b.reliability_note == "named editors" and b.licence == "licensed"
     assert [s.name for s in store.list_sources("news")] == ["Reuters"]
     assert store.get_source(a.id).name == "Reuters"
 
@@ -98,8 +100,10 @@ def test_dense_and_lexical_search(corpus_store, embedder):
     [
         (SearchFilters(topics=["Military Space"]), {"Airbus wins military satellite communications contract"}),
         (SearchFilters(source_types=["official"]), {"SIRTAP tactical UAS completes first flight"}),
-        (SearchFilters(min_credibility=0.9), {"Dassault and Airbus clash over FCAS leadership",
-                                              "SIRTAP tactical UAS completes first flight"}),
+        (SearchFilters(source_reliability=["A"]), {"SIRTAP tactical UAS completes first flight"}),
+        (SearchFilters(source_reliability=[]), set()),
+        (SearchFilters(source_types=["community"]), set()),  # its only document is quarantined
+        (SearchFilters(source_types=["community"], include_quarantined=True), {"FCAS thoughts"}),
         (SearchFilters(published_after=NOW - timedelta(days=30)), {"Dassault and Airbus clash over FCAS leadership"}),
         (SearchFilters(published_before=NOW - timedelta(days=365)),
          {"Eurofighter electronic warfare upgrade moves ahead"}),
@@ -142,7 +146,7 @@ def test_neighbours(corpus_store):
 
 
 def test_injection_flags_survive(corpus_store):
-    hit = corpus_store.lexical_search("cancel FCAS immediately", 1, SearchFilters())[0][0]
+    hit = corpus_store.lexical_search("cancel FCAS immediately", 1, SearchFilters(include_quarantined=True))[0][0]
     assert "ignore_instructions" in corpus_store.get_evidence([hit])[hit].injection_flags
 
 

@@ -88,17 +88,6 @@ topics:
   - bae systems
   - leonardo
   - saab
-topic_impact_weights:
-  FCAS: 0.92
-  Uncrewed Combat Aircraft: 0.9
-  Eurofighter: 0.84
-  Military Space: 0.82
-  Aerial Refuelling: 0.76
-  Military Transport: 0.72
-  European Defence Autonomy: 0.88
-  Policy and Procurement: 0.78
-  Competitor Activity: 0.8
-  Supply Chain: 0.74
 business_units:
   Airbus Defence and Space:
   - defence

@@ -82,7 +82,7 @@ def store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Store]:
 
 CORPUS = [
     {
-        "publisher": "Reuters", "type": "news", "prior": 0.9, "group": "reuters",
+        "publisher": "Reuters", "type": "news", "category": "established_newsroom", "group": "reuters",
         "url": "https://www.reuters.com/business/aerospace-defense/fcas-dispute-2026?utm_source=rss",
         "title": "Dassault and Airbus clash over FCAS leadership",
         "published": NOW - timedelta(days=10),
@@ -94,7 +94,7 @@ CORPUS = [
         ),
     },
     {
-        "publisher": "Airbus Newsroom", "type": "official", "prior": 0.95, "group": "airbus",
+        "publisher": "Airbus Newsroom", "type": "official", "category": "official_primary", "group": "airbus",
         "url": "https://www.airbus.com/en/newsroom/press-releases/sirtap-first-flight",
         "title": "SIRTAP tactical UAS completes first flight",
         "published": NOW - timedelta(days=40),
@@ -104,7 +104,7 @@ CORPUS = [
         ),
     },
     {
-        "publisher": "Defense News", "type": "news", "prior": 0.84, "group": "defense_news",
+        "publisher": "Defense News", "type": "news", "category": "established_newsroom", "group": "defense_news",
         "url": "https://www.defensenews.com/space/2026/09/airbus-secure-satcom",
         "title": "Airbus wins military satellite communications contract",
         "published": NOW - timedelta(days=60),
@@ -114,7 +114,8 @@ CORPUS = [
         ),
     },
     {
-        "publisher": "Breaking Defense", "type": "news", "prior": 0.84, "group": "breaking_defense",
+        "publisher": "Breaking Defense", "type": "news", "category": "established_newsroom",
+        "group": "breaking_defense",
         "url": "https://breakingdefense.com/2025/03/eurofighter-ew-upgrade",
         "title": "Eurofighter electronic warfare upgrade moves ahead",
         "published": NOW - timedelta(days=600),
@@ -124,7 +125,7 @@ CORPUS = [
         ),
     },
     {
-        "publisher": "Unknown Blog", "type": "community", "prior": 0.3, "group": "unknown_blog",
+        "publisher": "Unknown Blog", "type": "community", "category": "aggregator_or_ugc", "group": "unknown_blog",
         "url": "https://example-blog.net/fcas-thoughts",
         "title": "FCAS thoughts",
         "published": None,
@@ -138,7 +139,7 @@ CORPUS = [
 
 def make_document(store: Store, item: dict, taxonomy: Taxonomy) -> int:
     source = store.upsert_source(
-        SourceIn(name=item["publisher"], source_type=item["type"], credibility_prior=item["prior"],
+        SourceIn(name=item["publisher"], source_type=item["type"], category=item["category"],
                  publisher_group=item["group"], licence="unknown")
     )
     text = clean_text(item["text"])

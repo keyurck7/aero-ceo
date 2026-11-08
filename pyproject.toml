@@ -27,6 +27,8 @@ dependencies = [
 postgres = ["psycopg[binary,pool]>=3.2,<4", "pgvector>=0.3,<1"]
 mcp = ["mcp>=2.3,<3", "uvicorn>=0.30", "starlette>=0.40"]
 extract = ["trafilatura>=2.0"]
+# Phase-3 briefing graph (durable state, interrupt() for human review).
+agent = ["langgraph>=1.0,<2"]
 local-models = ["sentence-transformers>=3.0", "torch>=2.3"]
 dev = [
     "pytest>=8",
@@ -37,7 +39,7 @@ dev = [
     "types-PyYAML",
     "types-python-dateutil",
 ]
-all = ["aero-ceo[postgres,mcp,extract,dev]"]
+all = ["aero-ceo[postgres,mcp,extract,agent,dev]"]
 
 [project.scripts]
 aero = "aero.cli:main"
@@ -46,7 +48,7 @@ aero = "aero.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aero = ["storage/migrations/*/*.sql", "py.typed"]
+aero = ["storage/migrations/*/*.sql", "llm/prompts/*.yaml", "py.typed"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

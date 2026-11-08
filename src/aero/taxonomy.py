@@ -30,8 +30,6 @@ class Taxonomy:
     # Names removed before topic matching: "Airbus Defence and Space" is a company,
     # not evidence about military space (v1 tagged every Airbus article "Military Space").
     ignore_phrases: list[str] = field(default_factory=list)
-    # Prior impact per topic (v1 scoring.impact_score). A prior, not a measurement.
-    topic_impact_weights: dict[str, float] = field(default_factory=dict)
     business_unit_topics: dict[str, list[str]] = field(default_factory=dict)
     umbrella_business_units: list[str] = field(default_factory=list)
 
@@ -94,7 +92,6 @@ def load_taxonomy(path: str | Path) -> Taxonomy:
         intents=data.get("intents", {}),
         constraints=data.get("constraints", {}),
         ignore_phrases=data.get("ignore_phrases", []),
-        topic_impact_weights={str(k): float(v) for k, v in data.get("topic_impact_weights", {}).items()},
         business_unit_topics=data.get("business_unit_topics", {}),
         umbrella_business_units=data.get("umbrella_business_units", []),
     )

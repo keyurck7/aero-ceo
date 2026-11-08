@@ -1,151 +1,331 @@
-"""Strategic signal extraction and aggregation (replaces ``app/intelligence/signal_extractor.py``).
+"""Strategic signal extraction (LLM, ADR 0008) and aggregation.
 
-v1 fired a rule when the document's topic matched **or** any keyword appeared, so one
-document triggered many rules (595 signals from 190 documents). Its "evidence_strength"
-was a constant, and no passage was recorded (finding B5).
+Replaces v1's keyword rules (``app/intelligence/signal_extractor.py``) and v2's interim ``rule:v1-strict``,
+which could not read direction: "what the failed fighter deal means" counted as an FCAS *opportunity*.
 
-``RuleSignalExtractor`` (extractor id ``rule:v1-strict``) keeps v1's rules
-(``seeds/signal_rules_v1.yaml``) but:
+Per document, ``LLMSignalExtractor``:
 
-* requires a keyword occurrence in the text, plus either a topic match or two
-  distinct keywords;
-* ignores keyword hits inside company names (``taxonomy.ignore_phrases``), so
-  "Airbus Defence and **Space**" is not evidence about space;
-* emits at most one signal per (document, rule), from its best chunk;
-* stores the exact sentence and its character span, so every signal is citable.
+1. asks the model ``N`` times (self-consistency samples) for signals in a JSON schema whose enums come from the
+   taxonomy: type, topic, ``direction`` for Airbus, ``event_status``, ``materiality`` (written rubric) and an
+   exact quote with its chunk id;
+2. rejects deterministically: unknown chunk, quote not found verbatim in that chunk, or an incoherent
+   type/direction pair (an opportunity cannot be bad news for Airbus, a risk cannot be good news);
+3. keeps a signal only if a strict majority of samples produced it (same chunk, type and topic). Field values
+   are the modal ones, and fields on which samples disagreed are recorded in ``disputed_fields``;
+4. asks an independent verifier whether the chunk supports the signal's claim, and stores only ``supported``.
 
-An LLM extractor (roadmap phase 5) will implement the same ``extract`` signature.
+Nothing is scored: every stored field is a category, a quote, or a count. Rejections are reported with reasons
+so the extraction can be audited and evaluated (``aero eval signals``).
 """
 
 from __future__ import annotations
 
-import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import cached_property
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from aero.dates import utcnow
-from aero.domain import Document, EvidenceChunk, Signal, SignalIn, SignalType
+from aero.domain import (
+    ALLOWED_DIRECTIONS,
+    CorroborationItem,
+    Direction,
+    Document,
+    EventStatus,
+    EvidenceChunk,
+    Materiality,
+    Signal,
+    SignalFilters,
+    SignalIn,
+    SignalType,
+)
+from aero.intelligence.verification import Verifier, find_quote, information_credibility
+from aero.llm import LLM, PromptRegistry, default_registry, generate
+from aero.llm.concurrency import pmap
+from aero.log import get_logger
+from aero.retrieval import HybridRetriever
 from aero.storage import Store
-from aero.taxonomy import Taxonomy
+from aero.taxonomy import DEFAULT_TOPIC, Taxonomy
 
-DEFAULT_IMPACT = 0.62
+log = get_logger(__name__)
+
 MAX_QUOTE_CHARS = 400
 
 
-@dataclass(frozen=True)
-class SignalRule:
-    signal_type: SignalType
-    title: str
-    description: str
-    topics: tuple[str, ...]
-    keywords: tuple[str, ...]
-    pattern: re.Pattern[str]
-
-
-def _keyword_pattern(keywords: Iterable[str]) -> re.Pattern[str]:
-    escaped = sorted((re.escape(k.strip()) for k in keywords if k.strip()), key=len, reverse=True)
-    return re.compile(r"(?<![a-z0-9])(?:" + "|".join(escaped) + r")(?![a-z0-9])", re.IGNORECASE)
-
-
-def load_signal_rules(path: str | Path) -> list[SignalRule]:
+def load_materiality_rubric(path: str | Path) -> str:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    rules: list[SignalRule] = []
-    for signal_type in ("opportunity", "risk", "trend"):
-        for r in data.get(signal_type, []):
-            rules.append(SignalRule(
-                signal_type=signal_type, title=r["title"], description=r["description"],
-                topics=tuple(r.get("topic_match", [])), keywords=tuple(r["keywords"]),
-                pattern=_keyword_pattern(r["keywords"]),
-            ))
-    return rules
+    lines = []
+    for level, spec in data["levels"].items():
+        lines.append(f"  - {level}: {spec['definition']}")
+        lines += [f"      e.g. {ex}" for ex in spec.get("examples", [])]
+    return "\n".join(lines)
 
 
-def sentence_span(text: str, pos: int) -> tuple[int, int]:
-    """Bounds of the sentence (or line) containing ``pos``, whitespace-trimmed, at most MAX_QUOTE_CHARS."""
-    start = max(text.rfind(c, 0, pos) for c in ".!?\n") + 1
-    ends = [i for i in (text.find(c, pos) for c in ".!?\n") if i != -1]
-    end = (min(ends) + 1) if ends else len(text)
-    while start < end and text[start].isspace():
-        start += 1
-    while end > start and text[end - 1].isspace():
-        end -= 1
-    if end - start > MAX_QUOTE_CHARS:
-        start = max(start, pos - MAX_QUOTE_CHARS // 2)
-        end = min(end, start + MAX_QUOTE_CHARS)
-    return start, end
+@dataclass
+class Candidate:
+    sample: int
+    chunk_id: int
+    signal_type: SignalType
+    topic: str
+    title: str
+    claim: str
+    direction: Direction
+    event_status: EventStatus
+    materiality: Materiality
+    materiality_rationale: str
+    quote: str
+    span: tuple[int, int] = (0, 0)
+
+    @property
+    def key(self) -> tuple[int, str, str]:
+        return self.chunk_id, self.signal_type, self.topic
 
 
-class RuleSignalExtractor:
-    extractor_id = "rule:v1-strict"
+@dataclass
+class Rejection:
+    document_id: int
+    reason: str
+    detail: dict[str, Any]
 
-    def __init__(self, rules: Sequence[SignalRule], taxonomy: Taxonomy) -> None:
-        self.rules = list(rules)
+
+@dataclass
+class DocumentResult:
+    document_id: int
+    signals: list[SignalIn] = field(default_factory=list)
+    topics: list[str] = field(default_factory=list)
+    rejections: list[Rejection] = field(default_factory=list)
+    skipped: str | None = None
+
+
+def _mode(values: Sequence[str]) -> tuple[str, bool]:
+    """Most common value (first-seen wins a tie) and whether the samples disagreed at all."""
+    counts = Counter(values)
+    best = max(counts.values())
+    winner = next(v for v in values if counts[v] == best)
+    return winner, len(counts) > 1
+
+
+class LLMSignalExtractor:
+    def __init__(self, llm: LLM, verifier: Verifier, taxonomy: Taxonomy, materiality_rubric: str, *,
+                 samples: int = 3, temperature: float = 0.7, registry: PromptRegistry | None = None) -> None:
+        if samples < 1:
+            raise ValueError("samples must be >= 1")
+        self.llm = llm
+        self.verifier = verifier
         self.taxonomy = taxonomy
-        self._ignore = _keyword_pattern(taxonomy.ignore_phrases) if taxonomy.ignore_phrases else None
-        self._impact = dict(taxonomy.topic_impact_weights)
+        self.rubric = materiality_rubric
+        self.samples = samples
+        self.temperature = temperature if samples > 1 else 0.0
+        self.prompt = (registry or default_registry()).get("signal_extract")
 
-    def _hits(self, rule: SignalRule, text: str) -> list[re.Match[str]]:
-        ignored = [m.span() for m in self._ignore.finditer(text)] if self._ignore else []
-        return [m for m in rule.pattern.finditer(text)
-                if not any(a <= m.start() < b for a, b in ignored)]
+    @property
+    def extractor_id(self) -> str:
+        return self.prompt.ref
 
-    def extract(self, document: Document, chunks: Sequence[EvidenceChunk]) -> list[SignalIn]:
-        doc_topics = set(document.topics)
-        out: list[SignalIn] = []
-        for rule in self.rules:
-            topical = bool(doc_topics.intersection(rule.topics))
-            best: tuple[int, EvidenceChunk, re.Match[str]] | None = None
-            for chunk in chunks:
-                hits = self._hits(rule, chunk.text)
-                distinct = len({h.group(0).lower() for h in hits})
-                if not hits or (not topical and distinct < 2):
-                    continue
-                if best is None or distinct > best[0]:
-                    best = (distinct, chunk, hits[0])
-            if best is None:
+    @cached_property
+    def topics(self) -> list[str]:
+        return [*self.taxonomy.topic_names(), DEFAULT_TOPIC]
+
+    @cached_property
+    def output_model(self) -> type[BaseModel]:
+        """The response schema, with the taxonomy's topics as an enum so decoding cannot invent topics."""
+        topic_type: Any = Literal[tuple(self.topics)]
+        item = create_model(
+            "ExtractedSignal", chunk_id=(int, ...), signal_type=(SignalType, ...), topic=(topic_type, ...),
+            title=(str, ...), claim=(str, ...), direction_for_airbus=(Direction, ...),
+            event_status=(EventStatus, ...), materiality=(Materiality, ...), materiality_rationale=(str, ...),
+            quote=(str, ...),
+        )
+        return create_model("SignalExtraction", document_topics=(list[topic_type], ...), signals=(list[item], ...))
+
+    def _variables(self, document: Document, chunks: Sequence[EvidenceChunk], publisher: str) -> dict[str, str]:
+        body = "\n".join(f'<chunk id="{c.chunk_id}">\n{c.text}\n</chunk>' for c in chunks)
+        return {
+            "materiality_rubric": self.rubric, "topics": ", ".join(self.topics),
+            "business_units": ", ".join(self.taxonomy.business_units), "publisher": publisher,
+            "published_at": document.published_at.date().isoformat() if document.published_at else "unknown",
+            "content_level": document.content_level, "title": document.title, "chunks": body,
+        }
+
+    def _sample(self, variables: dict[str, str], sample: int) -> tuple[list[str], list[dict[str, Any]]]:
+        out, _ = generate(self.llm, self.prompt, self.output_model, variables,
+                          temperature=self.temperature, seed=sample if self.samples > 1 else None,
+                          top_p=0.8 if self.samples > 1 else None)
+        data = out.model_dump()
+        return list(data["document_topics"]), list(data["signals"])
+
+    def extract(self, document: Document, chunks: Sequence[EvidenceChunk]) -> DocumentResult:
+        result = DocumentResult(document_id=document.id)
+        if not chunks:
+            result.skipped = "no_chunks"
+            return result
+        if document.injection_flags:
+            result.skipped = "quarantined"  # never feed instruction-like text to the model
+            return result
+        by_id = {c.chunk_id: c for c in chunks}
+        variables = self._variables(document, chunks, chunks[0].publisher)
+        outputs = [self._sample(variables, s) for s in range(self.samples)]
+
+        # 1-2. deterministic checks per candidate
+        candidates: list[Candidate] = []
+        for s, (_, raw_signals) in enumerate(outputs):
+            for raw in raw_signals:
+                cand = Candidate(sample=s, chunk_id=raw["chunk_id"], signal_type=raw["signal_type"],
+                                 topic=raw["topic"], title=raw["title"].strip()[:160], claim=raw["claim"].strip(),
+                                 direction=raw["direction_for_airbus"], event_status=raw["event_status"],
+                                 materiality=raw["materiality"],
+                                 materiality_rationale=raw["materiality_rationale"].strip(),
+                                 quote=raw["quote"].strip())
+                reason = self._check(cand, by_id)
+                if reason:
+                    result.rejections.append(Rejection(document.id, reason, {"sample": s, **raw}))
+                else:
+                    candidates.append(cand)
+
+        # 3. self-consistency: strict majority of samples, modal field values
+        groups: dict[tuple[int, str, str], list[Candidate]] = defaultdict(list)
+        for cand in candidates:
+            if all(c.sample != cand.sample for c in groups[cand.key]):  # one vote per sample
+                groups[cand.key].append(cand)
+        majority = self.samples // 2 + 1
+        kept: list[tuple[Candidate, int, list[str]]] = []
+        for key, members in groups.items():
+            if len(members) < majority:
+                result.rejections.append(Rejection(document.id, "no_majority", {
+                    "key": list(key), "samples_agreeing": len(members), "samples_total": self.samples}))
                 continue
-            distinct, chunk, hit = best
-            q_start, q_end = sentence_span(chunk.text, hit.start())
-            topic = next((t for t in rule.topics if t in doc_topics), rule.topics[0] if rule.topics else "General")
-            confidence = min(0.95, 0.35 + 0.15 * distinct + (0.15 if topical else 0.0))
-            if chunk.content_level == "headline_summary":
-                confidence *= 0.85  # a headline supports "X was reported", little more
-            out.append(SignalIn(
-                document_id=document.id, chunk_id=chunk.chunk_id, signal_type=rule.signal_type, title=rule.title,
-                description=rule.description, topic=topic,
-                business_unit=self.taxonomy.business_unit_for(topic, chunk.text),
-                evidence_quote=chunk.text[q_start:q_end], quote_start=chunk.char_start + q_start,
-                quote_end=chunk.char_start + q_end, impact=self._impact.get(topic, DEFAULT_IMPACT),
-                confidence=round(confidence, 3), extractor=self.extractor_id,
+            disputed: list[str] = []
+            chosen: dict[str, str] = {}
+            for fname in ("direction", "event_status", "materiality"):
+                value, split = _mode([getattr(m, fname) for m in members])
+                chosen[fname] = value
+                if split:
+                    disputed.append(fname)
+            rep = next((m for m in members if all(getattr(m, f) == v for f, v in chosen.items())), members[0])
+            kept.append((rep, len(members), disputed))
+
+        # 4. independent verification against the chunk
+        for rep, agreeing, disputed in kept:
+            verdict = self.verifier.verify(rep.claim, by_id[rep.chunk_id])
+            if verdict.verdict != "supported":
+                result.rejections.append(Rejection(document.id, f"verification_{verdict.verdict}", {
+                    "claim": rep.claim, "chunk_id": rep.chunk_id, "reason": verdict.reason}))
+                continue
+            chunk = by_id[rep.chunk_id]
+            result.signals.append(SignalIn(
+                document_id=document.id, chunk_id=rep.chunk_id, signal_type=rep.signal_type, title=rep.title,
+                description=rep.claim, topic=rep.topic, business_unit=self.taxonomy.business_unit_for(rep.topic),
+                direction=rep.direction, event_status=rep.event_status, materiality=rep.materiality,
+                materiality_rationale=rep.materiality_rationale,
+                evidence_quote=chunk.text[rep.span[0]:rep.span[1]],
+                quote_start=chunk.char_start + rep.span[0], quote_end=chunk.char_start + rep.span[1],
+                verification_note=verdict.reason, samples_agreeing=agreeing, samples_total=self.samples,
+                disputed_fields=disputed, extractor=self.extractor_id, model=self.llm.model,
             ))
-        return out
+
+        topic_votes = Counter(t for topics, _ in outputs for t in dict.fromkeys(topics))
+        result.topics = [t for t in self.topics if topic_votes[t] >= majority and t != DEFAULT_TOPIC]
+        return result
+
+    @staticmethod
+    def _check(cand: Candidate, by_id: dict[int, EvidenceChunk]) -> str | None:
+        chunk = by_id.get(cand.chunk_id)
+        if chunk is None:
+            return "unknown_chunk"
+        if not cand.quote or len(cand.quote) > MAX_QUOTE_CHARS * 2:
+            return "bad_quote_length"
+        span = find_quote(chunk.text, cand.quote)
+        if span is None:
+            return "ungrounded_quote"
+        cand.span = span
+        if cand.direction not in ALLOWED_DIRECTIONS[cand.signal_type]:
+            return "incoherent_direction"
+        if len(cand.claim) < 3 or len(cand.title) < 3:
+            return "empty_claim"
+        return None
 
 
-def run_extraction(
-    store: Store, extractor: RuleSignalExtractor, document_ids: Iterable[int] | None = None
-) -> Counter[str]:
-    stats: Counter[str] = Counter()
-    for doc_id in document_ids if document_ids is not None else store.list_document_ids():
+@dataclass
+class ExtractionReport:
+    extractor: str
+    model: str
+    stats: Counter[str] = field(default_factory=Counter)
+    rejections: list[Rejection] = field(default_factory=list)
+
+    def summary(self) -> dict[str, Any]:
+        return {"extractor": self.extractor, "model": self.model, **dict(self.stats)}
+
+
+def run_extraction(store: Store, extractor: LLMSignalExtractor, document_ids: Iterable[int] | None = None,
+                   max_workers: int = 4, update_topics: bool = True) -> ExtractionReport:
+    """Extract, verify and store signals per document (idempotent per document and extractor version)."""
+    report = ExtractionReport(extractor=extractor.extractor_id, model=extractor.llm.model)
+    ids = list(document_ids if document_ids is not None else store.list_document_ids())
+
+    def one(doc_id: int) -> DocumentResult | None:
         doc = store.get_document(doc_id)
         if doc is None:
+            return None
+        res = extractor.extract(doc, store.document_chunks(doc_id))
+        if res.skipped is None:
+            store.replace_signals(doc_id, extractor.extractor_id, res.signals)
+            if update_topics:
+                store.set_document_topics(doc_id, res.topics, extractor.extractor_id)
+        return res
+
+    for res in pmap(one, ids, max_workers):
+        if res is None:
             continue
-        signals = extractor.extract(doc, store.document_chunks(doc_id))
-        store.replace_signals(doc_id, extractor.extractor_id, signals)
-        stats["documents"] += 1
-        stats["signals"] += len(signals)
-        for s in signals:
-            stats[s.signal_type] += 1
+        report.stats["documents"] += 1
+        if res.skipped:
+            report.stats[f"skipped_{res.skipped}"] += 1
+            continue
+        report.stats["signals"] += len(res.signals)
+        for s in res.signals:
+            report.stats[s.signal_type] += 1
+            report.stats[f"direction_{s.direction}"] += 1
+        for r in res.rejections:
+            report.stats[f"rejected_{r.reason}"] += 1
+        report.rejections += res.rejections
+    log.info("signal extraction", extra=report.summary())
+    return report
+
+
+# ----------------------------------------------------------------------------- corroboration
+
+
+def corroborate(store: Store, retriever: HybridRetriever, verifier: Verifier, signal: Signal,
+                depth: int = 5) -> tuple[list[CorroborationItem], int]:
+    """Judge the closest passages from *other* publisher groups against the signal's claim."""
+    related = retriever.find_related(signal.chunk_id, top_k=depth, other_publishers_only=True)
+    items: list[CorroborationItem] = []
+    for hit in related:
+        v = verifier.verify(signal.description, hit)
+        if v.verdict != "not_enough_info":
+            items.append(CorroborationItem(chunk_id=hit.chunk_id, verdict=v.verdict,
+                                           publisher_group=(hit.publisher_group or hit.publisher).lower()))
+    grade = information_credibility(items)
+    store.set_signal_corroboration(signal.id, items, grade)
+    return items, grade
+
+
+def run_corroboration(store: Store, retriever: HybridRetriever, verifier: Verifier,
+                      filters: SignalFilters | None = None, depth: int = 5, max_workers: int = 4) -> Counter[str]:
+    signals = store.list_signals(filters or SignalFilters(), limit=100_000)
+    stats: Counter[str] = Counter()
+    for _, grade in pmap(lambda s: corroborate(store, retriever, verifier, s, depth), signals, max_workers):
+        stats[f"credibility_{grade}"] += 1
+    stats["signals"] = len(signals)
     return stats
 
 
-# ----------------------------------------------------------------------------- aggregation
+# ----------------------------------------------------------------------------- aggregation (counts only)
 
 
 class TimeseriesPoint(BaseModel):
@@ -153,7 +333,8 @@ class TimeseriesPoint(BaseModel):
     topic: str
     signal_type: SignalType
     count: int
-    avg_impact: float
+    by_materiality: dict[str, int]
+    by_direction: dict[str, int]
 
 
 class TopMover(BaseModel):
@@ -167,16 +348,18 @@ class TopMover(BaseModel):
 def signal_timeseries(
     signals: Iterable[Signal], bucket: Literal["month", "quarter"] = "month"
 ) -> list[TimeseriesPoint]:
-    """Counts per period/topic/type by publication date; undated signals are left out."""
-    groups: dict[tuple[str, str, SignalType], list[float]] = defaultdict(list)
+    """Counts per period/topic/type by publication date, split by materiality and direction; undated left out."""
+    groups: dict[tuple[str, str, SignalType], list[Signal]] = defaultdict(list)
     for s in signals:
         if s.published_at is None:
             continue
         d = s.published_at
         period = f"{d.year}-{d.month:02d}" if bucket == "month" else f"{d.year}-Q{(d.month - 1) // 3 + 1}"
-        groups[(period, s.topic, s.signal_type)].append(s.impact)
+        groups[(period, s.topic, s.signal_type)].append(s)
     return [
-        TimeseriesPoint(period=p, topic=t, signal_type=st, count=len(v), avg_impact=round(sum(v) / len(v), 3))
+        TimeseriesPoint(period=p, topic=t, signal_type=st, count=len(v),
+                        by_materiality=dict(Counter(s.materiality for s in v)),
+                        by_direction=dict(Counter(s.direction for s in v)))
         for (p, t, st), v in sorted(groups.items())
     ]
 

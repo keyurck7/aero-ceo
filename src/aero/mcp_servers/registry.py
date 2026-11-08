@@ -18,6 +18,7 @@ from aero.config import Settings
 from aero.embeddings import build_embedder
 from aero.intelligence.partners import PartnerRegistry
 from aero.intelligence.strategy import load_drilldown_prompts, load_risk_checklist
+from aero.llm import LLM, build_llm
 from aero.mcp_servers import evidence, partners, signals, strategy
 from aero.rerank import build_reranker
 from aero.retrieval import HybridRetriever, RetrievalConfig
@@ -34,6 +35,7 @@ class ServerDeps:
     store: Store
     taxonomy: Taxonomy
     retriever: HybridRetriever | None = None
+    llm: LLM | None = None
     _seeds: Path = field(init=False)
 
     def __post_init__(self) -> None:
@@ -50,6 +52,11 @@ class ServerDeps:
                                              RetrievalConfig.from_settings(s))
         return self.retriever
 
+    def get_llm(self) -> LLM:
+        if self.llm is None:
+            self.llm = build_llm(self.settings)
+        return self.llm
+
     def seed(self, name: str) -> Path:
         return self._seeds / name
 
@@ -65,7 +72,8 @@ def build_server(name: ServerName, deps: ServerDeps) -> MCPServer:
             load_drilldown_prompts(deps.seed("drilldown_prompts.yaml")), deps.settings.strategy_allow_writes,
         )
     if name == "partners":
-        return partners.build_partners_server(deps.store, PartnerRegistry.load(deps.seed("partners.yaml")))
+        return partners.build_partners_server(deps.store, PartnerRegistry.load(deps.seed("partners.yaml")),
+                                              deps.get_llm())
     mcp = MCPServer(
         name="aero-all", title="AERO-CEO (all tools)", version=__version__,
         instructions="\n\n".join([evidence.INSTRUCTIONS, signals.INSTRUCTIONS, strategy.INSTRUCTIONS,
@@ -77,5 +85,5 @@ def build_server(name: ServerName, deps: ServerDeps) -> MCPServer:
         mcp, deps.store, deps.taxonomy, load_risk_checklist(deps.seed("risk_checklist.yaml")),
         load_drilldown_prompts(deps.seed("drilldown_prompts.yaml")), deps.settings.strategy_allow_writes,
     )
-    partners.register_partner_tools(mcp, deps.store, PartnerRegistry.load(deps.seed("partners.yaml")))
+    partners.register_partner_tools(mcp, deps.store, PartnerRegistry.load(deps.seed("partners.yaml")), deps.get_llm())
     return mcp
