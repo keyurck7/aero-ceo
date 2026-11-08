@@ -130,6 +130,7 @@ def cmd_seed_recommendations(args: argparse.Namespace, s: Settings) -> int:
 
 
 def cmd_rec(args: argparse.Namespace, s: Settings) -> int:
+    from aero.domain import RecommendationStatus
     from aero.intelligence.strategy import ApprovalBlockedError, change_status, independent_publishers
     from aero.storage.base import InvalidTransitionError
 
@@ -145,7 +146,7 @@ def cmd_rec(args: argparse.Namespace, s: Settings) -> int:
             if not (args.reviewer and args.reason):
                 print("--reviewer and --reason are required", file=sys.stderr)
                 return 2
-            target = "approved" if args.action == "approve" else "retired"
+            target: RecommendationStatus = "approved" if args.action == "approve" else "retired"
             try:
                 change_status(store, args.id, target, args.reviewer, args.reason)
             except (ApprovalBlockedError, InvalidTransitionError, KeyError) as exc:
