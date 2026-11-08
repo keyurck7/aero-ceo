@@ -86,8 +86,9 @@ def read_df(query: str, params=None) -> pd.DataFrame:
         conn.close()
 
 
-@st.cache_resource(show_spinner=False)
 def get_ceo_agent():
+    # Create a fresh agent per request to avoid reusing SQLite connections
+    # across Streamlit worker threads. The local LLM is cached separately.
     return CEOChatAgent()
 
 

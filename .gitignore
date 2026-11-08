@@ -13,3 +13,6 @@ data/cache/
 models/
 logs/
 .pgdata/
+cloudflared
+
+logs/*.jsonl

@@ -8,17 +8,17 @@
 - **Topic:** Airbus strategy
 - **Region:** relevant markets
 - **Constraints:** long_term
-- **Answer confidence:** 0.799
+- **Answer confidence:** 0.804
 
 ## Executive Answer
 The main risks around **Airbus strategy** are execution complexity, procurement uncertainty, partner alignment, competitor pressure, and technology integration. Airbus should treat these as strategic management risks, not only technical risks.
 
 ## Strategic Recommendation
-**Primary recommendation:** Protect Airbus' strategic position in FCAS through modular architecture leadership
+**Primary recommendation:** Use Eurofighter modernization as a near-term revenue and capability bridge
 
-Airbus should reduce dependence on fragile programme-level alignment by leading modular FCAS architecture, mission systems, combat cloud, sensors, and crewed-uncrewed integration. The strategic focus should be on controllable system layers where Airbus can preserve influence even if partner politics shift.
+Airbus should prioritize Eurofighter modernization packages that connect radar, electronic warfare, mission software, and uncrewed teaming. This keeps Eurofighter strategically relevant while FCAS timelines remain long and uncertain.
 
-**Priority:** High | **Recommendation confidence:** 0.716
+**Priority:** High | **Recommendation confidence:** 0.759
 
 ## Decision Options
 - **Conservative option:** Prioritize lower-risk upgrades, evidence monitoring, supplier resilience, and modular investments that preserve optionality.
@@ -57,22 +57,22 @@ Airbus should reduce dependence on fragile programme-level alignment by leading 
    Source: Airbus Official Web | Type: official | Topic: Military Space | Retrieval score: 0.710  
    URL: https://www.airbus.com/en/products-services/defence/intelligence-and-data  
    Evidence snippet: Ensure readiness and anticipation Trusted partner To make the best decisions, you need the best information. Defence and security decision-makers rely on the support of technology, tools and systems to ensure readiness and preparedness to anticipate and respond to events and missions. Our C5ISR (Command, Control, Computers, Communications, Cyber,...
-5. **Airbus leads national industry launch of Spain's new combat training system - Airbus**  
-   Source: Airbus | Type: news | Topic: Military Space | Retrieval score: 0.709  
-   URL: https://news.google.com/rss/articles/CBMizAFBVV95cUxOV1hFRkJya29qZEJpVEJSM3dxckFfZ0ljWUxXNWJFV0dJT21lOHNTQ3doUHR6NDB4S0ltNm5iczR6MllaMi01Rldab2lOMXFxWFQ3Y3ZEeWZDWnlxVzRqdVViTGRZWlc4NFk4ckVIOHhEbTFjcFdNZVBOejJQeTNudHROc05pdHBSdVpiODkydk5jMm1WaDRxNEQtOHIzMkV3NnQ0RmhtTHp2V0NEcWdUc1ZNYkJNMUZTN1pvVTI0VE1Eem82Wmk2NXEtMjk?oc=5  
-   Evidence snippet: Title: Airbus leads national industry launch of Spain's new combat training system - Airbus Source: Airbus Search context: Airbus Defence and Space Published: Tue, 28 Apr 2026 07:00:00 GMT Strategic intelligence note: This public news/RSS item mentions Airbus in the context of Airbus Defence and Space. The item should be considered as an external market...
-6. **Boeing vs. Airbus: Which Aerospace Giant Is the Better Investment Now? - TradingView**  
+5. **Boeing vs. Airbus: Which Aerospace Giant Is the Better Investment Now? - TradingView**  
    Source: TradingView | Type: news | Topic: Military Space | Retrieval score: 0.709  
    URL: https://news.google.com/rss/articles/CBMiwAFBVV95cUxObFRWOW5iZUJJS1IzWDdIRWxKaE1JRWI5VkNEY3BUQTFGck1GMGV1REpBemQ3QllBVU5PY3FkMUJtenV4dkVWeXRKZ2p3OGpkbWVpdjRTVTZ0TklELWIzd2Y3Q1UwV0lFSnJBZ3N2X0Rybk1RWWJwR0RUV2JocVZSWkdnRWNqbV96eWVYak80RTV3R0s5LURkQTJQamswODZOZElyQS1mZkREX0Y5YzNHQVJ0eTlia2xvUlhOWmp5dmQ?oc=5  
    Evidence snippet: Title: Boeing vs. Airbus: Which Aerospace Giant Is the Better Investment Now? - TradingView Source: TradingView Search context: Airbus Defence and Space Published: Mon, 22 Jun 2026 14:27:00 GMT Strategic intelligence note: This public news/RSS item mentions Airbus in the context of Airbus Defence and Space. The item should be considered as an external...
-7. **Airbus Defence Head Highlights Major Franco-German Rift Crippling Their First Stealth Fighter Program - Military Watch Magazine**  
+6. **Airbus Defence Head Highlights Major Franco-German Rift Crippling Their First Stealth Fighter Program - Military Watch Magazine**  
    Source: Military Watch Magazine | Type: news | Topic: FCAS | Retrieval score: 0.704  
    URL: https://news.google.com/rss/articles/CBMikgFBVV95cUxORlljYXVybE40MWl1T1hKZW5MSGFNVUdBbTdwUzBFbHJNT1J6Yy0zbzZIa1pkQmZlVUQ1dFdWRlh5Qk5ZT3RTcDlpa1NjeFR5Tk83TXhMMHNSZ1lfd2hwUWlwalVqNGw4QkNBMEx1dGJ0eTV1X2NHX3h2QXN2dmNMX2ZZamJ1MEdYNEZHUDdQQXBlZw?oc=5  
    Evidence snippet: Title: Airbus Defence Head Highlights Major Franco-German Rift Crippling Their First Stealth Fighter Program - Military Watch Magazine Source: Military Watch Magazine Search context: Airbus Future Combat Air System Published: Mon, 25 May 2026 07:00:00 GMT Strategic intelligence note: This public news/RSS item mentions Airbus in the context of Airbus Future...
-8. **Airbus and Saab Might Be Ready to Make a Sixth-Gen Fighter Deal - The National Interest**  
+7. **Airbus and Saab Might Be Ready to Make a Sixth-Gen Fighter Deal - The National Interest**  
    Source: The National Interest | Type: news | Topic: FCAS | Retrieval score: 0.703  
    URL: https://news.google.com/rss/articles/CBMiqgFBVV95cUxQM0ZBVTZZbWR3XzNJUzBsZlJXek9nVXZXOExRVlg2QXlfUWRKN3o5eU1xeGg1M1poVTF1emZmT2tld3VZZHZHamc0S3BfTzNvNDVKc0ZUT0hoZUFFQVA5MkdGZFJOTHlrYngyZ3hCZXZTQWozWHp2allxR0ZDTjNjaWZfRWstYkt3ekNQSDB6TUpqVHJJLXFsbDNEVXE2THhiT0E2bHhQc2hadw?oc=5  
    Evidence snippet: Title: Airbus and Saab Might Be Ready to Make a Sixth-Gen Fighter Deal - The National Interest Source: The National Interest Search context: Airbus Future Combat Air System Published: Sun, 31 May 2026 07:00:00 GMT Strategic intelligence note: This public news/RSS item mentions Airbus in the context of Airbus Future Combat Air System. The item should be...
+8. **Airbus-led alliance lobbies Germany on fighter jet project - Reuters**  
+   Source: Reuters | Type: news | Topic: Military Space | Retrieval score: 0.701  
+   URL: https://news.google.com/rss/articles/CBMiugFBVV95cUxNVklZUHRvSHc0VkFOZ0dNUUY4cUw3RTRXV191bFhuTVJQV1J3Qmx3RWxEZ0ZOVE1sMExwQWFkRVRrZFY1SzBDNUl0WUdXZ0JIRnNMUVBKM1YtWnRsTTA3X2ZEUFA4aG00ekZzVGt6eExnSmVnUGZJR3Y3QnlIZld0ZnJfa01qc2FNZTZWZFZ1a2dsbDdmdVJEWFpCeEt0YVpCM05qTlFpYUdJNFlmNkF1MkduVkQzbWhMWFE?oc=5  
+   Evidence snippet: Title: Airbus-led alliance lobbies Germany on fighter jet project - Reuters Source: Reuters Search context: Airbus Defence and Space Published: Tue, 09 Jun 2026 07:00:00 GMT Strategic intelligence note: This public news/RSS item mentions Airbus in the context of Airbus Defence and Space. The item should be considered as an external market signal and should...
 
 ## Confidence Explanation
 Confidence is **High** because the answer is supported by retrieved evidence, strategic signals, and existing recommendations.

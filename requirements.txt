@@ -23,3 +23,16 @@ faiss-cpu
 lxml
 readability-lxml
 python-dateutil
+
+langgraph
+langchain
+langchain-core
+streamlit
+plotly
+faiss-cpu
+sentence-transformers
+transformers
+accelerate
+safetensors
+sentencepiece
+python-dotenv

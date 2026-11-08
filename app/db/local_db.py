@@ -10,7 +10,7 @@ DB_PATH = os.getenv("SQLITE_DB_PATH", "data/aero_ceo.sqlite")
 
 def get_connection():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
