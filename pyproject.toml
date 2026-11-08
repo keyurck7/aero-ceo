@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aero-ceo"
+version = "2.0.0a1"
+description = "AERO-CEO v2 — MCP-native strategic intelligence agent for Airbus SE"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Keyur Chaudhari" }]
+# Core runtime: no GPU, no database driver, no web framework. Everything heavy is an extra,
+# so each container image installs only what its service needs.
+dependencies = [
+    "pydantic>=2.9,<3",
+    "numpy>=1.26",
+    "pyyaml>=6",
+    "python-dateutil>=2.9",
+    "python-dotenv>=1.0",
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary,pool]>=3.2,<4", "pgvector>=0.3,<1"]
+mcp = ["mcp>=2.3,<3", "uvicorn>=0.30", "starlette>=0.40"]
+extract = ["trafilatura>=2.0"]
+# Phase-3 briefing graph (durable state, interrupt() for human review).
+agent = ["langgraph>=1.0,<2"]
+local-models = ["sentence-transformers>=3.0", "torch>=2.3"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-requests",
+    "types-PyYAML",
+    "types-python-dateutil",
+]
+all = ["aero-ceo[postgres,mcp,extract,agent,dev]"]
+
+[project.scripts]
+aero = "aero.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aero = ["storage/migrations/*/*.sql", "llm/prompts/*.yaml", "py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "postgres: needs AERO_TEST_DATABASE_URL pointing at Postgres with pgvector",
+    "network: touches the public internet (never run in CI)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["app", "scripts/*.sh"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S", "PTH"]
+ignore = ["S101", "S608", "RUF001"]  # asserts in tests; SQL is parameterised (see storage/); unicode in prose
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "PTH"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+packages = ["aero"]
+strict = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[tool.coverage.run]
+source = ["aero"]
+branch = true

@@ -1,13 +1,122 @@
+# AERO-CEO v2 local stack.
+#   cp .env.example .env            # then set POSTGRES_PASSWORD and AERO_MCP_BEARER_TOKEN
+#   docker compose up -d            # postgres + embeddings + migrate + evidence-mcp
+#   docker compose --profile ingest run --rm worker ingest news --limit 50
+#   docker compose --profile rerank up -d
+#
+# Image tags are pinned; bump them deliberately (and re-run evals) rather than floating.
+# On a GPU host, switch tei images to the CUDA tags (see TEI docs) and add a `deploy.resources` GPU reservation.
+
+name: aero-ceo
+
+x-aero-env: &aero-env
+  AERO_ENV: ${AERO_ENV:-local}
+  AERO_DATABASE_URL: postgresql://aero:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/aero_ceo
+  AERO_EMBEDDING_BACKEND: tei
+  AERO_TEI_EMBED_URL: http://tei-embed:80
+  AERO_EMBEDDING_MODEL: BAAI/bge-large-en-v1.5
+  AERO_EMBEDDING_DIM: "1024"
+  AERO_RERANKER_BACKEND: ${AERO_RERANKER_BACKEND:-none}
+  AERO_TEI_RERANK_URL: http://tei-rerank:80
+
 services:
   postgres:
-    image: pgvector/pgvector:pg16
-    container_name: aero_ceo_postgres
+    image: pgvector/pgvector:0.8.0-pg16
     environment:
       POSTGRES_USER: aero
-      POSTGRES_PASSWORD: aero_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: aero_ceo
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./.pgdata:/var/lib/postgresql/data
-      - ./app/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aero -d aero_ceo"]
+      interval: 5s
+      retries: 20
+
+  tei-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    command: ["--model-id", "BAAI/bge-large-en-v1.5", "--max-client-batch-size", "64"]
+    volumes: [hf-cache:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:80/health || exit 1"]
+      interval: 10s
+      retries: 60
+
+  tei-rerank:
+    profiles: [rerank]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+    volumes: [hf-cache:/data]
+
+  migrate:
+    build: { context: ., args: { EXTRAS: "postgres,mcp" } }
+    image: aero-ceo/evidence-mcp:dev
+    environment: *aero-env
+    entrypoint: ["sh", "-c", "aero db migrate && aero seed sources && aero seed recommendations --no-link"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  evidence-mcp:
+    image: aero-ceo/evidence-mcp:dev
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8101"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,evidence-mcp:8101"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+    command: ["serve", "evidence"]
+    ports: ["127.0.0.1:8101:8101"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      tei-embed: { condition: service_healthy }
+    restart: unless-stopped
+
+  # signals / strategy / partners need no embeddings (SQL + lexical search only), so no TEI dependency.
+  signals-mcp: &plain-mcp
+    image: aero-ceo/evidence-mcp:dev
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8102"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,signals-mcp:8102"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+    command: ["serve", "signals"]
+    ports: ["127.0.0.1:8102:8102"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  strategy-mcp:
+    <<: *plain-mcp
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8103"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,strategy-mcp:8103"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+      AERO_STRATEGY_ALLOW_WRITES: ${AERO_STRATEGY_ALLOW_WRITES:-false}   # proposals/approvals: opt in
+    command: ["serve", "strategy"]
+    ports: ["127.0.0.1:8103:8103"]
+
+  partners-mcp:
+    <<: *plain-mcp
+    environment:
+      <<: *aero-env
+      AERO_MCP_PORT: "8104"
+      AERO_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*,partners-mcp:8104"
+      AERO_MCP_BEARER_TOKEN: ${AERO_MCP_BEARER_TOKEN:?set AERO_MCP_BEARER_TOKEN in .env}
+    command: ["serve", "partners"]
+    ports: ["127.0.0.1:8104:8104"]
+
+  worker:
+    profiles: [ingest]
+    build: { context: ., args: { EXTRAS: "postgres,extract" } }
+    image: aero-ceo/worker:dev
+    environment: *aero-env
+    command: ["ingest", "news", "--limit", "50"]
+    volumes: ["./data:/app/data:ro"]   # for `ingest v1 /app/data/aero_ceo.sqlite`
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      tei-embed: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  hf-cache:

@@ -1,0 +1,24 @@
+id: partner_compare
+version: "1"
+description: Pairwise judgement of two partner candidates for one need (run in both orders; Bradley-Terry fit).
+temperature: 0.0
+max_tokens: 500
+system: |
+  You compare two candidate partners, A and B, for one capability need of Airbus Defence and Space, using only
+  their assessments below. Decide which is the better partner for THIS need, weighing capability fit, documented
+  track record, stated constraints and risks as a senior strategy analyst would. Answer "tie" if the
+  assessments give no defensible reason to prefer one. Do not prefer a candidate because of its position (A or B)
+  or the length of its description.
+user: |
+  NEED: {{need}}
+  {{constraints}}
+
+  <candidate id="A">
+  {{candidate_a}}
+  </candidate>
+
+  <candidate id="B">
+  {{candidate_b}}
+  </candidate>
+
+  Return the JSON object.

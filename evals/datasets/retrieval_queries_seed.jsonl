@@ -1,0 +1,13 @@
+{"qid": "rq001", "query": "FCAS partner risk Dassault future fighter", "v1_expected_terms": ["fcas", "dassault", "fighter"]}
+{"qid": "rq002", "query": "SIRTAP uncrewed aircraft opportunity Airbus", "v1_expected_terms": ["sirtap", "uncrewed", "airbus"]}
+{"qid": "rq003", "query": "military space secure communications Airbus", "v1_expected_terms": ["space", "satellite", "communications"]}
+{"qid": "rq004", "query": "Eurofighter modernization uncrewed teaming", "v1_expected_terms": ["eurofighter", "typhoon", "uncrewed"]}
+{"qid": "rq005", "query": "A400M C295 MRTT Airbus defence production delivery execution risk", "v1_expected_terms": ["a400m", "c295", "mrtt", "delivery", "production", "execution", "risk"]}
+{"qid": "rq006", "query": "Should Airbus collaborate with another European organization for sixth-generation fighter systems?"}
+{"qid": "rq007", "query": "What are the biggest risks if FCAS is delayed?"}
+{"qid": "rq008", "query": "What should Airbus do if budget is limited but it still wants to compete in uncrewed combat aircraft?"}
+{"qid": "rq009", "query": "Explain the recommendation about military space and secure communications with evidence."}
+{"qid": "rq010", "query": "Which partner could help Airbus in Spain for SIRTAP and uncrewed systems?"}
+{"qid": "rq011", "query": "What is the lower-risk version of investing in future combat systems?"}
+{"qid": "rq012", "query": "What should Airbus prioritize next in military space and secure communications?"}
+{"qid": "rq013", "query": "How should Airbus respond if drone demand grows faster than future fighter procurement?"}
