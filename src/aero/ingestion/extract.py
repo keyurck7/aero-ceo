@@ -168,7 +168,8 @@ def extract_article(html: str, url: str | None = None) -> Article:
         extracted = trafilatura.extract(html, url=url, include_comments=False, include_tables=False,
                                         favor_precision=True, output_format="txt")
         if extracted and len(extracted.split()) >= 60:
-            text, extractor = clean_text(extracted), "trafilatura"
+            # trafilatura's txt output puts one paragraph per line; make each a paragraph for the chunker.
+            text, extractor = clean_text(extracted.replace("\n", "\n\n")), "trafilatura"
     except ImportError:
         pass
     if not text:

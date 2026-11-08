@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -70,6 +71,17 @@ def test_extract_article_metadata_and_boilerplate():
     assert art.canonical_link.endswith("/sirtap-first-flight")
     assert "Rota test range" in art.text and "Cookie Policy" not in art.text
     assert "\n\n" in art.text  # paragraphs preserved
+
+
+def test_trafilatura_paragraphs_are_kept(monkeypatch):
+    """trafilatura emits one paragraph per line (found on Data Lab, where the extract extra is installed)."""
+    import types
+
+    body = "\n".join(f"Paragraph {i} " + "word " * 30 for i in range(3))
+    fake = types.SimpleNamespace(extract=lambda *a, **k: body)
+    monkeypatch.setitem(sys.modules, "trafilatura", fake)
+    art = extract_article("<html><body><p>x</p></body></html>", "https://example.com/a")
+    assert art.extractor == "trafilatura" and art.text.count("\n\n") == 2
 
 
 def test_discover_links_stays_on_allowed_hosts():

@@ -20,12 +20,13 @@ At 170 credits, that is about 17 h on an A6000, 14 h on the Pro 6000 or 11 h on 
 ## One-time setup (any node)
 
 ```bash
-cd ~ && git clone https://github.com/keyurck7/aero-ceo.git && cd aero-ceo && git checkout v2
+# The top of ~/vault is read-only; ~/vault/<project>/ may be writable and persists. ~ is lost on stop.
+cd ~ && git clone -b v2 https://github.com/keyurck7/aero-ceo.git aero-ceo-v2 && cd aero-ceo-v2
 python -m venv --system-site-packages .venv && source .venv/bin/activate   # reuse the image's torch/vLLM
 pip install -e ".[mcp,extract,dev]" sentence-transformers
 echo 'export HF_HOME=~/hf-cache' >> ~/.bashrc && export HF_HOME=~/hf-cache  # keep model downloads across spawns
 df -h ~                                                                   # check the home quota before pulling a 54 GB model
-pytest -q                                                                 # expect: all pass, Postgres tests skipped
+python -m pytest -q   # NOT bare `pytest`: that is the image's copy and sees the image's old mcp 1.25
 ```
 
 `.env` for this box (SQLite plus in-process models; Docker is normally unavailable inside JupyterHub):
@@ -59,7 +60,8 @@ measured in the sandbox is nDCG@10 0.42 / capped Recall@10 0.49 / MRR 0.77.
 
 ## Phase 3 session: serve Qwen with vLLM
 
-Check that the image's vLLM supports Qwen3.6 (0.19 or newer is the documented minimum):
+The image ships vLLM 0.13.0 (checked 2026-11-08), which is older than the documented minimum for Qwen3.6 (0.19).
+Install a newer vLLM in the venv before phase 3, or use a Qwen3 model that 0.13 supports:
 
 ```bash
 python -c "import vllm; print(vllm.__version__)"
