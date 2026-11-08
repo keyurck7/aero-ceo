@@ -67,7 +67,17 @@ P3 (licence review: **owner decision**), P4 (shared model serving: TEI wired, vL
 **Retrieval baseline** on 15 queries × 186 docs (draft qrels, `evals/datasets/`), hashing embedder + BM25 (sandbox floor):
 nDCG@10 **0.42** · capped Recall@10 **0.49** · MRR **0.77**. Best: FCAS/Dassault (0.90). Worst: abstract strategy
 questions such as "drone demand grows faster than fighter procurement" (0.00): the gap BGE is meant to close.
-BGE ± reranker numbers come from the Data Lab session (`docs/runbooks/datalab.md`).
+**Data Lab, 2026-11-08** (RTX A6000, BGE-large-en-v1.5, same qrels):
+
+| Setup | nDCG@10 | capped R@10 | MRR |
+|---|---|---|---|
+| hashing + BM25 (floor) | 0.42 | 0.49 | 0.77 |
+| **BGE + BM25 hybrid** | **0.49** | **0.58** | **0.85** |
+| BGE + BM25 + bge-reranker-v2-m3 (raw scores blended) | 0.35 | 0.41 | 0.74 |
+
+The reranker *hurt*: it prefers long generic official pages over 10-word headlines, and its compressed raw
+probabilities let the credibility term outvote relevance. Rerank scores are now min-max normalised per query;
+`AERO_RETRIEVAL_MODE` (hybrid/dense/lexical) and the weight settings allow a clean ablation.
 
 ## Owner decisions (2026-11-07)
 Academic use → `research_mode` (ADR 0004) · Qwen only, local → Qwen3.6-27B on vLLM (ADR 0006) · Data Lab nodes per phase (runbook).

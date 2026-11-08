@@ -50,6 +50,28 @@ def test_reranker_controls_relevance(corpus_store, embedder):
     assert "satellite" in res.hits[0].text and res.hits[0].scores.rerank == 1.0
 
 
+def test_compressed_rerank_scores_still_decide_relevance(corpus_store, embedder):
+    """Data Lab finding: raw cross-encoder probabilities near 0 let credibility outvote relevance."""
+
+    class Compressed:
+        name = "fake"
+
+        def score(self, query, texts):
+            return [0.03 if "Kratos" in t or "satellite" in t else 0.01 for t in texts]
+
+    res = HybridRetriever(corpus_store, embedder, reranker=Compressed()).search("Airbus", top_k=5)
+    assert "satellite" in res.hits[0].text  # 0.03 vs 0.01 is decisive after normalisation
+    assert res.hits[0].scores.rerank == pytest.approx(0.03)
+
+
+@pytest.mark.parametrize("mode", ["dense", "lexical"])
+def test_single_retriever_modes(corpus_store, embedder, mode):
+    res = HybridRetriever(corpus_store, embedder, config=RetrievalConfig(mode=mode)).search("SIRTAP first flight")
+    assert res.hits
+    assert all((h.scores.lexical_rank is None) if mode == "dense" else (h.scores.dense_rank is None)
+               for h in res.hits)
+
+
 def test_independent_publisher_count(corpus_store, embedder):
     res = HybridRetriever(corpus_store, embedder).search("Airbus", top_k=10)
     assert res.independent_publishers == len({h.publisher_group for h in res.hits})

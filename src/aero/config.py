@@ -45,6 +45,8 @@ class Settings(BaseModel):
     tei_rerank_url: str | None = None
 
     # --- retrieval -----------------------------------------------------------------
+    # hybrid = dense + lexical (default); dense / lexical exist for ablations.
+    retrieval_mode: Literal["hybrid", "dense", "lexical"] = "hybrid"
     retrieval_candidate_k: int = Field(50, ge=5, le=500)
     retrieval_rrf_k: int = Field(60, ge=1)
     retrieval_credibility_weight: float = Field(0.10, ge=0.0, le=0.5)

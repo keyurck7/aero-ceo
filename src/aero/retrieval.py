@@ -30,6 +30,7 @@ from aero.storage import Store
 
 @dataclass(frozen=True)
 class RetrievalConfig:
+    mode: str = "hybrid"
     candidate_k: int = 50
     rrf_k: int = 60
     credibility_weight: float = 0.10
@@ -39,6 +40,7 @@ class RetrievalConfig:
     @classmethod
     def from_settings(cls, s: Settings) -> RetrievalConfig:
         return cls(
+            mode=s.retrieval_mode,
             candidate_k=s.retrieval_candidate_k,
             rrf_k=s.retrieval_rrf_k,
             credibility_weight=s.retrieval_credibility_weight,
@@ -81,9 +83,13 @@ class HybridRetriever:
         cfg = self.config
         n = max(cfg.candidate_k, top_k)
 
-        qvec = self.embedder.embed_query(query)
-        dense = self.store.dense_search(qvec, n, filters, self.embedder.model_name)
-        lexical = self.store.lexical_search(query, n, filters)
+        dense: list[tuple[int, float]] = []
+        lexical: list[tuple[int, float]] = []
+        if cfg.mode in ("hybrid", "dense"):
+            qvec = self.embedder.embed_query(query)
+            dense = self.store.dense_search(qvec, n, filters, self.embedder.model_name)
+        if cfg.mode in ("hybrid", "lexical"):
+            lexical = self.store.lexical_search(query, n, filters)
 
         dense_rank = {cid: (i + 1, s) for i, (cid, s) in enumerate(dense)}
         lex_rank = {cid: (i + 1, s) for i, (cid, s) in enumerate(lexical)}
@@ -97,17 +103,22 @@ class HybridRetriever:
         candidates = [c for c in candidates if c in evidence]
 
         rerank_scores: dict[int, float] = {}
+        rerank_norm: dict[int, float] = {}
         if self.reranker is not None and candidates:
             scores = self.reranker.score(query, [evidence[c].text for c in candidates])
             rerank_scores = dict(zip(candidates, scores, strict=True))
+            # Min-max within this candidate set. Cross-encoder probabilities are often compressed near 0
+            # (e.g. for 10-word headlines); raw values would let the credibility term outvote relevance.
+            lo, hi = min(scores), max(scores)
+            rerank_norm = {c: (s - lo) / (hi - lo) if hi > lo else 1.0 for c, s in rerank_scores.items()}
 
-        # Relevance in [0, 1]: rerank probability if available, else RRF normalised to the best candidate.
+        # Relevance in [0, 1]: normalised rerank score if available, else RRF normalised to the best candidate.
         best_rrf = max(fused[c] for c in candidates) if candidates else 1.0
         now = filters.as_of or utcnow()
         hits: list[EvidenceHit] = []
         for cid in candidates:
             ev = evidence[cid]
-            relevance = rerank_scores[cid] if rerank_scores else fused[cid] / best_rrf
+            relevance = rerank_norm[cid] if rerank_norm else fused[cid] / best_rrf
             cred = evidence_credibility(ev.credibility_prior, ev.content_level, ev.injection_flags)
             rec = recency_weight(ev.published_at, now=now, half_life_days=cfg.recency_half_life_days)
             final = blend_final(relevance, cred, rec, cfg.credibility_weight, cfg.recency_weight)
