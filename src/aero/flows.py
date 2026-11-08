@@ -20,11 +20,10 @@ from aero.ingestion.collectors import SourcePlan, collect_news, collect_official
 from aero.ingestion.http import PoliteFetcher
 from aero.ingestion.migrate_v1 import migrate_v1
 from aero.ingestion.pipeline import Ingestor, RawItem
+from aero.intelligence import strategy
 from aero.intelligence.signals import RuleSignalExtractor, load_signal_rules, run_extraction
-from aero.intelligence.strategy import load_recommendation_seeds
-from aero.intelligence.strategy import seed_recommendations as _seed_recommendations
-from aero.retrieval import HybridRetriever
 from aero.log import get_logger
+from aero.retrieval import HybridRetriever
 from aero.storage import Store
 from aero.taxonomy import load_taxonomy
 
@@ -93,9 +92,9 @@ def extract_signals(store: Store, settings: Settings, document_ids: Iterable[int
 
 def seed_recommendations(store: Store, settings: Settings, retriever: HybridRetriever | None) -> Counter[str]:
     seeds = Path(settings.seeds_dir)
-    recs = load_recommendation_seeds(seeds / "recommendations_v1.yaml", load_taxonomy(seeds / "taxonomy.yaml"),
-                                     seeds / "signal_rules_v1.yaml")
-    return _seed_recommendations(store, retriever, recs)
+    recs = strategy.load_recommendation_seeds(seeds / "recommendations_v1.yaml",
+                                              load_taxonomy(seeds / "taxonomy.yaml"), seeds / "signal_rules_v1.yaml")
+    return strategy.seed_recommendations(store, retriever, recs)
 
 
 def embed_pending(store: Store, settings: Settings, embedder: Embedder) -> int:

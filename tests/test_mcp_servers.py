@@ -105,7 +105,7 @@ def test_strategy_write_flow_with_approval_gate(corpus_store, taxonomy):
         return tools, one_pub, blocked, two_pub, ok, prompt, bad_chunk
 
     tools, one_pub, blocked, two_pub, ok, prompt, bad_chunk = call(server, go)
-    assert WRITE_TOOLS <= set(tools) and tools["propose_recommendation"].annotations.read_only_hint is False
+    assert set(tools) >= WRITE_TOOLS and tools["propose_recommendation"].annotations.read_only_hint is False
     assert one_pub.structured_content["recommendation"]["status"] == "draft"
     assert one_pub.structured_content["approved_advice"] is False
     assert blocked.is_error and "independent publishers" in blocked.content[0].text
